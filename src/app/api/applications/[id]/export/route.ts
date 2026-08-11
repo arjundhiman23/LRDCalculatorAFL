@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import type { ScheduleRow, TenureResult } from "@/lib/engine/types";
+import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -54,7 +55,10 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
   const { id } = await params;
   const app = await prisma.application.findUnique({
     where: { id },
-    include: { lessees: { orderBy: { position: "asc" } } },
+    include: {
+      lessees: { orderBy: { position: "asc" } },
+      reconciliations: { orderBy: { dueDate: "asc" } },
+    },
   });
   if (!app) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -128,6 +132,97 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
     const w = ws.addRow(["Warnings"]);
     w.font = { bold: true };
     for (const msg of result.warnings) ws.addRow([msg]);
+  }
+
+  // ---- Lease details sheet (fields as rows, lessees as columns) ----
+  const activeLessees = payload.lessees.filter((l) => l.grossRent > 0);
+  const ld = wb.addWorksheet("Lease details");
+  ld.getColumn(1).width = 34;
+  const ldHeader = ld.addRow(["Lease details", ...activeLessees.map((l) => l.name || `Lessee ${l.position}`)]);
+  ldHeader.font = { bold: true };
+  for (let c = 2; c <= activeLessees.length + 1; c++) ld.getColumn(c).width = 26;
+  for (const row of leaseDetailsRows(payload, activeLessees)) {
+    const r = ld.addRow([row.label, ...row.values.map((v) => v ?? "—")]);
+    r.getCell(1).font = { bold: true };
+    if (["Current rent (gross)", "Security deposit", "Rental per sq.ft"].includes(row.label)) {
+      for (let c = 2; c <= activeLessees.length + 1; c++) r.getCell(c).numFmt = MONEY;
+    }
+  }
+
+  // ---- Rental break up & reco sheet ----
+  const rb = wb.addWorksheet("Rental break up & reco");
+  rb.getColumn(1).width = 8;
+  rb.getColumn(2).width = 26;
+  for (let c = 3; c <= 8; c++) rb.getColumn(c).width = 20;
+  rb.addRow(["Lessee-wise current rental break-up with % contribution"]).font = { bold: true };
+  const rbHead = rb.addRow([
+    "Sr. no",
+    "Lessee",
+    "Agreement date",
+    "Balance lease period (months)",
+    "Gross rent",
+    "Net rental to be credited (gross + GST − TDS)",
+    "Net rental excluding GST (gross − TDS)",
+    "Contribution",
+  ]);
+  rbHead.font = { bold: true };
+  const breakup = rentalBreakup(payload, activeLessees);
+  for (const b of breakup) {
+    const r = rb.addRow([
+      b.srNo,
+      b.name,
+      b.agreementDate ?? "—",
+      b.balanceLeaseMonths ?? "—",
+      b.grossRent,
+      b.toCredit,
+      b.netExGst,
+      b.contribution,
+    ]);
+    r.getCell(5).numFmt = MONEY;
+    r.getCell(6).numFmt = MONEY;
+    r.getCell(7).numFmt = MONEY;
+    r.getCell(8).numFmt = PCT;
+  }
+  const totalRow = rb.addRow([
+    "",
+    "Total",
+    "",
+    "",
+    breakup.reduce((s, b) => s + b.grossRent, 0),
+    breakup.reduce((s, b) => s + b.toCredit, 0),
+    breakup.reduce((s, b) => s + b.netExGst, 0),
+    breakup.reduce((s, b) => s + b.contribution, 0),
+  ]);
+  totalRow.font = { bold: true };
+  totalRow.getCell(5).numFmt = MONEY;
+  totalRow.getCell(6).numFmt = MONEY;
+  totalRow.getCell(7).numFmt = MONEY;
+  totalRow.getCell(8).numFmt = PCT;
+
+  rb.addRow([]);
+  rb.addRow(["Rental credit reconciliation"]).font = { bold: true };
+  const grid = recoGrid(payload, app.lessees, app.reconciliations);
+  if (grid.columns.length > 0) {
+    const nameRow: (string | null)[] = ["", ""];
+    const bankRow: (string | null)[] = ["", "Bank a/c:"];
+    const subHead: string[] = ["Sr. no", "Due date"];
+    for (const col of grid.columns) {
+      nameRow.push(col.lesseeName, null, null);
+      bankRow.push(col.bankAccount || "—", null, null);
+      subHead.push("Expected", "Actual", "Difference");
+    }
+    rb.addRow(nameRow).font = { bold: true };
+    rb.addRow(bankRow);
+    rb.addRow(subHead).font = { bold: true };
+    grid.dueDates.forEach((d, i) => {
+      const cells: (string | number | null)[] = [i, d];
+      for (const col of grid.columns) {
+        const c = col.cells[i];
+        cells.push(c.expected, c.actual, c.diff);
+      }
+      const r = rb.addRow(cells);
+      for (let c = 3; c <= 2 + grid.columns.length * 3; c++) r.getCell(c).numFmt = MONEY;
+    });
   }
 
   // ---- LTV trend sheet ----

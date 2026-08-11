@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import { formatDate, formatINR, formatPct } from "@/lib/format";
+import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,10 @@ export default async function ReportPage({
   const { id } = await params;
   const app = await prisma.application.findUnique({
     where: { id },
-    include: { lessees: { orderBy: { position: "asc" } } },
+    include: {
+      lessees: { orderBy: { position: "asc" } },
+      reconciliations: { orderBy: { dueDate: "asc" } },
+    },
   });
   if (!app) notFound();
   const settings = await prisma.settings.findUnique({ where: { id: "default" } });
@@ -43,6 +47,17 @@ export default async function ReportPage({
     result.tenureResults.find((r) => r.tenureMonths === payload.proposedTenure) ??
     result.tenureResults[0];
   const activeLessees = payload.lessees.filter((l) => l.grossRent > 0);
+  const leaseRows = leaseDetailsRows(payload, activeLessees);
+  const breakup = rentalBreakup(payload, activeLessees);
+  const hasCredits = app.reconciliations.length > 0;
+  const grid = hasCredits ? recoGrid(payload, app.lessees, app.reconciliations, 12) : null;
+  const numEligibility = 5;
+  const numUnique = result.uniqueTenure ? 6 : null;
+  const numSchedule = result.uniqueTenure ? 7 : 6;
+  const cellCls =
+    "[&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5";
+  const headCls =
+    "[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left";
 
   return (
     <div className="mx-auto max-w-4xl bg-white p-8 text-sm text-slate-800 print:p-0">
@@ -125,7 +140,128 @@ export default async function ReportPage({
       </section>
 
       <section className="mb-6">
-        <h2 className="mb-2 text-base font-semibold">3. Eligibility</h2>
+        <h2 className="mb-2 text-base font-semibold">3. Lease details</h2>
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className={headCls}>
+              <th className="w-1/4">Field</th>
+              {activeLessees.map((l) => (
+                <th key={l.position}>{l.name || `Lessee ${l.position}`}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {leaseRows.map((row) => (
+              <tr key={row.label} className={cellCls}>
+                <td className="bg-slate-50 font-medium">{row.label}</td>
+                {row.values.map((v, i) => (
+                  <td key={i}>{formatLeaseValue(row.label, v)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-base font-semibold">4. Rental break-up & reconciliation</h2>
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className={headCls}>
+              <th>Sr.</th>
+              <th>Lessee</th>
+              <th>Agreement date</th>
+              <th>Balance lease (months)</th>
+              <th className="!text-right">Gross rent</th>
+              <th className="!text-right">To credit (+GST −TDS)</th>
+              <th className="!text-right">Net excl. GST</th>
+              <th className="!text-right">Contribution</th>
+            </tr>
+          </thead>
+          <tbody>
+            {breakup.map((b) => (
+              <tr key={b.srNo} className={cellCls}>
+                <td>{b.srNo}</td>
+                <td>{b.name}</td>
+                <td>{formatDate(b.agreementDate)}</td>
+                <td>{b.balanceLeaseMonths ?? "—"}</td>
+                <td className="text-right">{formatINR(b.grossRent)}</td>
+                <td className="text-right">{formatINR(b.toCredit)}</td>
+                <td className="text-right">{formatINR(b.netExGst)}</td>
+                <td className="text-right">{formatPct(b.contribution, 1)}</td>
+              </tr>
+            ))}
+            <tr className={`font-semibold ${cellCls}`}>
+              <td />
+              <td>Total</td>
+              <td />
+              <td />
+              <td className="text-right">
+                {formatINR(breakup.reduce((s, b) => s + b.grossRent, 0))}
+              </td>
+              <td className="text-right">
+                {formatINR(breakup.reduce((s, b) => s + b.toCredit, 0))}
+              </td>
+              <td className="text-right">
+                {formatINR(breakup.reduce((s, b) => s + b.netExGst, 0))}
+              </td>
+              <td className="text-right">
+                {formatPct(breakup.reduce((s, b) => s + b.contribution, 0), 1)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        {grid && grid.columns.length > 0 ? (
+          <div className="mt-3">
+            <h3 className="mb-1 text-sm font-semibold">Rental credit reconciliation</h3>
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className={headCls}>
+                  <th rowSpan={2}>Due date</th>
+                  {grid.columns.map((c) => (
+                    <th key={c.lesseeName} colSpan={3} className="!text-center">
+                      {c.lesseeName}
+                      {c.bankAccount ? ` — ${c.bankAccount}` : ""}
+                    </th>
+                  ))}
+                </tr>
+                <tr className={headCls}>
+                  {grid.columns.map((c) => (
+                    <FragmentColumns key={c.lesseeName} />
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {grid.dueDates.map((d, i) => (
+                  <tr key={d} className={cellCls}>
+                    <td>{formatDate(d)}</td>
+                    {grid.columns.map((c) => {
+                      const cell = c.cells[i];
+                      return (
+                        <FragmentCells
+                          key={c.lesseeName}
+                          expected={cell.expected}
+                          actual={cell.actual}
+                          diff={cell.diff}
+                        />
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-slate-400">
+            No escrow credits recorded yet — the reconciliation grid will appear here
+            once actual credits are entered on the Rental break-up & reco tab.
+          </p>
+        )}
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-base font-semibold">{numEligibility}. Eligibility</h2>
         <table className="w-full border-collapse">
           <thead>
             <tr className="[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left">
@@ -159,7 +295,7 @@ export default async function ReportPage({
 
       {result.uniqueTenure && (
         <section className="mb-6">
-          <h2 className="mb-2 text-base font-semibold">4. Unique tenure (per lessee)</h2>
+          <h2 className="mb-2 text-base font-semibold">{numUnique}. Unique tenure (per lessee)</h2>
           <table className="w-full border-collapse">
             <thead>
               <tr className="[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left">
@@ -189,7 +325,7 @@ export default async function ReportPage({
       {reportTenure && (
         <section className="mb-6">
           <h2 className="mb-2 text-base font-semibold">
-            {result.uniqueTenure ? 5 : 4}. Repayment schedule — {reportTenure.tenureMonths}{" "}
+            {numSchedule}. Repayment schedule — {reportTenure.tenureMonths}{" "}
             months at {formatINR(reportTenure.maxEligibility)}
           </h2>
           <table className="w-full border-collapse text-xs">
@@ -219,11 +355,57 @@ export default async function ReportPage({
         </section>
       )}
 
-      <footer className="mt-8 border-t border-slate-200 pt-3 text-xs text-slate-400">
+      <footer className="mt-8 border-t border-slate-200 pt-3 text-xs text-slate-400 print-footer">
         Generated by LRD Calculator. Methodology replicates the credit team&apos;s
         Excel workbook (Goal Seek eligibility over discounted rental cash flows,
         actual/365 interest).
       </footer>
     </div>
+  );
+}
+
+const MONEY_LABELS = ["Current rent (gross)", "Security deposit", "Rental per sq.ft"];
+
+function formatLeaseValue(
+  label: string,
+  v: string | number | null,
+): string {
+  if (v === null) return "—";
+  if (typeof v === "number") {
+    return MONEY_LABELS.includes(label)
+      ? formatINR(v)
+      : new Intl.NumberFormat("en-IN").format(v);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return formatDate(v);
+  return v;
+}
+
+function FragmentColumns() {
+  return (
+    <>
+      <th className="!text-right">Expected</th>
+      <th className="!text-right">Actual</th>
+      <th className="!text-right">Difference</th>
+    </>
+  );
+}
+
+function FragmentCells({
+  expected,
+  actual,
+  diff,
+}: {
+  expected: number;
+  actual: number | null;
+  diff: number | null;
+}) {
+  return (
+    <>
+      <td className="text-right">{formatINR(expected)}</td>
+      <td className="text-right">{actual === null ? "—" : formatINR(actual)}</td>
+      <td className={`text-right ${diff !== null && diff < 0 ? "text-red-600" : ""}`}>
+        {diff === null ? "—" : formatINR(diff)}
+      </td>
+    </>
   );
 }
