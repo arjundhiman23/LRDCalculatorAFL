@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  RM
+  ADMIN
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String
+  passwordHash String
+  role         Role          @default(RM)
+  createdAt    DateTime      @default(now())
+  applications Application[]
+}
+
+/// Admin-configurable defaults applied to new applications.
+model Settings {
+  id                 String   @id @default("default")
+  defaultRoi         Float    @default(0.15)
+  defaultCashCover   Float    @default(0.9)
+  defaultTdsRate     Float    @default(0.1)
+  defaultDueDay      Int      @default(15)
+  standardTenures    Int[]    @default([180, 144, 120])
+  maxLessees         Int      @default(5)
+  updatedAt          DateTime @updatedAt
+}
+
+model Application {
+  id        String   @id @default(cuid())
+  name      String
+  createdBy User     @relation(fields: [userId], references: [id])
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ---- Lease details (metadata, mirrors the "Lease details" sheet) ----
+  lessorName       String  @default("")
+  propertyAddress  String  @default("")
+  agreementType    String  @default("")
+  gstTaxesBorneBy  String  @default("")
+  remark           String  @default("")
+
+  // ---- Global calculation inputs (mirrors the "Input" sheet) ----
+  roi               Float    @default(0.15)
+  disbursementDate  DateTime
+  dueDay            Int      @default(15) // 5 or 15
+  moratoriumMonths  Int      @default(0)
+  customTenure      Int?
+  valuation1        Float?
+  valuation2        Float?
+  valuation3        Float?
+  finalPropertyValue Float?
+  uniqueTenureMode  Boolean  @default(false)
+  /// Proposed loan amount chosen by the RM (defaults to eligibility).
+  proposedAmount    Float?
+  proposedTenure    Int?
+
+  lessees         Lessee[]
+  reconciliations ReconciliationEntry[]
+  manualRtr       ManualRtr?
+}
+
+model Lessee {
+  id            String      @id @default(cuid())
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  applicationId String
+  position      Int // 1..maxLessees
+
+  name             String @default("")
+  rating           String @default("")
+  grossRent        Float  @default(0)
+  tdsRate          Float  @default(0.1)
+  propertyTaxRate  Float  @default(0)
+  insuranceRate    Float  @default(0)
+  otherDeduction   Float  @default(0)
+  discountFactor   Float  @default(0.9)
+  firstEscalationDate DateTime?
+  /// JSON array of { rate: number, monthsAfterPrevious: number } (max 5).
+  escalations      Json   @default("[]")
+  uniqueTenureMonths Int?
+
+  // ---- Per-lessee lease metadata ----
+  agreementDate   DateTime?
+  fitOutPeriod    String    @default("")
+  leaseStartDate  DateTime?
+  leaseEndDate    DateTime?
+  lockInMonths    Int?
+  areaSqft        Float?
+  rentOnMonthlySales String @default("")
+  renewalClause   String    @default("")
+  securityDeposit Float?
+  occupancySince  String    @default("")
+
+  reconciliations ReconciliationEntry[]
+
+  @@unique([applicationId, position])
+}
+
+/// Actual monthly rent credits vs expected (the "Rental break up & reco" grid).
+model ReconciliationEntry {
+  id            String      @id @default(cuid())
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  applicationId String
+  lessee        Lessee      @relation(fields: [lesseeId], references: [id], onDelete: Cascade)
+  lesseeId      String
+  dueDate       DateTime
+  actualCredit  Float       @default(0)
+  bankAccount   String      @default("")
+
+  @@unique([lesseeId, dueDate])
+}
+
+/// The "Manual RTR" sheet: run-off of a manually entered balance using the
+/// application's rent stream with its own cash cover and ROI.
+model ManualRtr {
+  id             String      @id @default(cuid())
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  applicationId  String      @unique
+  openingBalance Float       @default(0)
+  roi            Float       @default(0.15)
+  cashCover      Float       @default(0.7)
+  startDate      DateTime
+  months         Int         @default(60)
+}
