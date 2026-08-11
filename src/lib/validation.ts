@@ -39,6 +39,15 @@ export const lesseeSchema = z.object({
   remark: z.string().max(2000).default(""),
 });
 
+export const manualRtrSchema = z.object({
+  enabled: z.boolean(),
+  openingBalance: z.number().min(0),
+  roi: z.number().min(0.001).max(1),
+  discountFactor: z.number().min(0).max(1),
+  startDate: isoDate,
+  months: z.number().int().min(1).max(600),
+});
+
 export const applicationSchema = z.object({
   name: z.string().min(1).max(300),
   lessorName: z.string().max(300).default(""),
@@ -59,6 +68,7 @@ export const applicationSchema = z.object({
   proposedAmount: z.number().min(0).nullable(),
   proposedTenure: z.number().int().min(1).max(600).nullable(),
   lessees: z.array(lesseeSchema).min(1),
+  manualRtr: manualRtrSchema.nullable(),
 });
 
 export type ApplicationPayload = z.infer<typeof applicationSchema>;
@@ -96,10 +106,10 @@ export const reconciliationSchema = z.object({
   ),
 });
 
-export const manualRtrSchema = z.object({
-  openingBalance: z.number().min(0),
-  roi: z.number().min(0.001).max(1),
-  cashCover: z.number().min(0).max(1),
-  startDate: isoDate,
-  months: z.number().int().min(1).max(600),
+export type ManualRtrPayload = z.infer<typeof manualRtrSchema>;
+
+export const simulateSchema = z.object({
+  application: applicationSchema,
+  loanAmount: z.number().min(0),
+  tenureMonths: z.number().int().min(1).max(600),
 });

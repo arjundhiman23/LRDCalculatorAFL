@@ -62,6 +62,7 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
     include: {
       lessees: { orderBy: { position: "asc" } },
       reconciliations: { orderBy: { dueDate: "asc" } },
+      manualRtr: true,
     },
   });
   if (!app) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -271,9 +272,9 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
     addScheduleSheet(wb, "UT consolidated", result.uniqueTenure.consolidatedSchedule);
   }
 
-  // ---- Manual RTR sheet (when configured with a balance) ----
-  const rtr = await computeManualRtr(id);
-  if (rtr && rtr.configured && rtr.schedule.length > 0) {
+  // ---- Manual RTR sheet (when switched on with a balance) ----
+  const rtr = computeManualRtr(payload);
+  if (rtr.enabled && rtr.schedule.length > 0) {
     const ws2 = wb.addWorksheet("Manual RTR");
     ws2.getColumn(1).width = 30;
     ws2.getColumn(2).width = 18;
@@ -284,15 +285,14 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
     };
     addCfg("Opening balance", rtr.config.openingBalance, MONEY);
     addCfg("ROI", rtr.config.roi, PCT);
-    addCfg("Cash cover", rtr.config.cashCover);
+    addCfg("Discounting factor", rtr.config.discountFactor);
     addCfg("Start date", rtr.config.startDate);
     addCfg("Months", rtr.config.months);
-    const payoff = rtr.schedule.find(
-      (r) => r.monthIndex > 0 && r.closingBalance <= 0,
-    );
     addCfg(
       "Fully repaid",
-      payoff ? `Month ${payoff.monthIndex} (${payoff.dueDate})` : "Not within horizon",
+      rtr.payoff
+        ? `Month ${rtr.payoff.monthIndex} (${rtr.payoff.dueDate})`
+        : "Not within horizon",
     );
     ws2.addRow([]);
     const head = ws2.addRow([
@@ -300,7 +300,7 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
       "Due date",
       "Days",
       "Net rent",
-      "Serviceable cash",
+      "Discounted cash flow",
       "Opening balance",
       "Interest",
       "Principal",

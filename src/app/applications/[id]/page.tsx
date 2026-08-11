@@ -17,7 +17,7 @@ export default async function ApplicationPage({
   const { id } = await params;
   const app = await prisma.application.findUnique({
     where: { id },
-    include: { lessees: { orderBy: { position: "asc" } } },
+    include: { lessees: { orderBy: { position: "asc" } }, manualRtr: true },
   });
   if (!app) notFound();
   const settings = await prisma.settings.findUnique({ where: { id: "default" } });

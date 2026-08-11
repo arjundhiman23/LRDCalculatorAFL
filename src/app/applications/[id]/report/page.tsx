@@ -24,6 +24,7 @@ export default async function ReportPage({
     include: {
       lessees: { orderBy: { position: "asc" } },
       reconciliations: { orderBy: { dueDate: "asc" } },
+      manualRtr: true,
     },
   });
   if (!app) notFound();
@@ -55,11 +56,9 @@ export default async function ReportPage({
   const breakup = rentalBreakup(payload, activeLessees);
   const hasCredits = app.reconciliations.length > 0;
   const grid = hasCredits ? recoGrid(payload, app.lessees, app.reconciliations, 12) : null;
-  const rtr = await computeManualRtr(id);
-  const showRtr = !!rtr && rtr.configured && rtr.schedule.length > 0;
-  const rtrPayoff = showRtr
-    ? rtr.schedule.find((r) => r.monthIndex > 0 && r.closingBalance <= 0)
-    : undefined;
+  const rtr = computeManualRtr(payload);
+  const showRtr = rtr.enabled && rtr.schedule.length > 0;
+  const rtrPayoff = rtr.payoff;
   const numEligibility = 5;
   const numUnique = result.uniqueTenure ? 6 : null;
   const numSchedule = result.uniqueTenure ? 7 : 6;
@@ -381,8 +380,8 @@ export default async function ReportPage({
           </h2>
           <p className="mb-2 text-xs text-slate-500">
             Opening balance {formatINR(rtr.config.openingBalance)} · ROI{" "}
-            {formatPct(rtr.config.roi)} · cash cover {rtr.config.cashCover} · from{" "}
-            {formatDate(rtr.config.startDate)} ·{" "}
+            {formatPct(rtr.config.roi)} · discounting factor{" "}
+            {rtr.config.discountFactor} · from {formatDate(rtr.config.startDate)} ·{" "}
             {rtrPayoff
               ? `fully repaid at month ${rtrPayoff.monthIndex} (${formatDate(rtrPayoff.dueDate)})`
               : `not fully repaid within ${rtr.config.months} months`}
@@ -392,7 +391,7 @@ export default async function ReportPage({
               <tr className={headCls}>
                 <th>#</th>
                 <th>Due date</th>
-                <th className="!text-right">Serviceable cash</th>
+                <th className="!text-right">Discounted cash flow</th>
                 <th className="!text-right">Interest</th>
                 <th className="!text-right">Principal</th>
                 <th className="!text-right">Closing balance</th>

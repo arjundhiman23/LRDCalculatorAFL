@@ -1,5 +1,5 @@
 /** Mapping between Prisma rows and the client-facing JSON payloads. */
-import type { Application, Lessee } from "@prisma/client";
+import type { Application, Lessee, ManualRtr } from "@prisma/client";
 import type { EscalationEvent, LesseeInput } from "./engine/types";
 import type { ApplicationPayload, LesseePayload } from "./validation";
 
@@ -44,7 +44,7 @@ export function lesseeToPayload(l: Lessee): LesseePayload {
 }
 
 export function applicationToPayload(
-  app: Application & { lessees: Lessee[] },
+  app: Application & { lessees: Lessee[]; manualRtr?: ManualRtr | null },
 ): ApplicationPayload & { id: string; updatedAt: string } {
   return {
     id: app.id,
@@ -70,6 +70,16 @@ export function applicationToPayload(
     lessees: [...app.lessees]
       .sort((a, b) => a.position - b.position)
       .map(lesseeToPayload),
+    manualRtr: app.manualRtr
+      ? {
+          enabled: app.manualRtr.enabled,
+          openingBalance: app.manualRtr.openingBalance,
+          roi: app.manualRtr.roi,
+          discountFactor: app.manualRtr.discountFactor,
+          startDate: dateToISO(app.manualRtr.startDate)!,
+          months: app.manualRtr.months,
+        }
+      : null,
   };
 }
 

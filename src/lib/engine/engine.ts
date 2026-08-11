@@ -178,6 +178,66 @@ export function adjustedEligibility(
   return lo;
 }
 
+/** Replace every cash cover (base and per-escalation) with a single factor. */
+export function withUniformDiscountFactor(
+  lessees: LesseeInput[],
+  discountFactor: number,
+): LesseeInput[] {
+  return lessees.map((l) => ({
+    ...l,
+    discountFactor,
+    escalations: l.escalations.map((e) => ({ ...e, discountFactor: null })),
+  }));
+}
+
+export interface SolvedDiscountFactor {
+  /** Cash cover that repays the loan exactly at the end of the tenure. */
+  discountFactor: number;
+  /** False when even 100% of net rent cannot clear the loan in the tenure. */
+  achievable: boolean;
+  schedule: ScheduleRow[];
+}
+
+/** Solve the cash cover needed for a given loan to close exactly at the end of
+ * the tenure. More cover means more cash to principal, so the closing balance
+ * falls monotonically as the factor rises — a plain bisection. */
+export function solveDiscountFactor(
+  loan: number,
+  months: number,
+  lessees: LesseeInput[],
+  params: EngineParams,
+): SolvedDiscountFactor {
+  const endingAt = (df: number) =>
+    endingBalance(loan, months, withUniformDiscountFactor(lessees, df), params);
+
+  if (loan <= 0) {
+    return {
+      discountFactor: 0,
+      achievable: true,
+      schedule: simulate(loan, months, withUniformDiscountFactor(lessees, 0), params),
+    };
+  }
+  if (endingAt(1) > 0) {
+    return {
+      discountFactor: 1,
+      achievable: false,
+      schedule: simulate(loan, months, withUniformDiscountFactor(lessees, 1), params),
+    };
+  }
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < BISECTION_ITERATIONS; i++) {
+    const mid = (lo + hi) / 2;
+    if (endingAt(mid) > 0) lo = mid;
+    else hi = mid;
+  }
+  return {
+    discountFactor: hi,
+    achievable: true,
+    schedule: simulate(loan, months, withUniformDiscountFactor(lessees, hi), params),
+  };
+}
+
 function payoffMonth(rows: ScheduleRow[]): number {
   for (const r of rows) {
     if (r.monthIndex > 0 && r.closingBalance <= 0) return r.monthIndex;

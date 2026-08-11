@@ -8,6 +8,7 @@ import { Badge, Button, Spinner } from "../ui";
 import { InputsTab } from "./InputsTab";
 import { LeaseDetailsTab } from "./LeaseDetailsTab";
 import { RecoTab } from "./RecoTab";
+import { RepaymentScheduleTab } from "./RepaymentScheduleTab";
 import { ResultsTab } from "./ResultsTab";
 import { RtrTab } from "./RtrTab";
 
@@ -15,6 +16,7 @@ const TABS = [
   { key: "inputs", label: "Inputs" },
   { key: "lease", label: "Lease details" },
   { key: "results", label: "Eligibility results" },
+  { key: "schedule", label: "Repayment schedule" },
   { key: "reco", label: "Rental break-up & reco" },
   { key: "rtr", label: "Manual RTR" },
 ] as const;
@@ -170,17 +172,18 @@ export function Workspace({
       {tab === "lease" && <LeaseDetailsTab app={app} update={update} />}
       {tab === "results" && (
         <ResultsTab
-          app={app}
           result={result}
           stale={resultStale}
           standardTenures={standardTenures}
           onCalculate={runCalculation}
           calculating={calculating}
-          update={update}
         />
       )}
+      {tab === "schedule" && (
+        <RepaymentScheduleTab app={app} result={result} update={update} />
+      )}
       {tab === "reco" && <RecoTab applicationId={applicationId} app={app} />}
-      {tab === "rtr" && <RtrTab applicationId={applicationId} />}
+      {tab === "rtr" && <RtrTab app={app} update={update} />}
     </div>
   );
 }

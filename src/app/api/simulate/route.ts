@@ -1,39 +1,43 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { handler } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
-import { simulate } from "@/lib/engine/engine";
+import { solveDiscountFactor } from "@/lib/engine/engine";
 import { lesseeToEngineInput } from "@/lib/serialize";
-import { applicationSchema } from "@/lib/validation";
+import { simulateSchema } from "@/lib/validation";
 
-const simulateSchema = z.object({
-  application: applicationSchema,
-  loanAmount: z.number().min(0),
-  tenureMonths: z.number().int().min(1).max(600),
-});
-
-/** Repayment schedule for an RM-proposed loan amount (may differ from the
- * computed eligibility). */
+/** Repayment schedule for an RM-proposed loan amount and tenure. The
+ * discounting factor is solved automatically so the loan closes exactly at the
+ * end of the proposed tenure. */
 export const POST = handler(async (req: Request) => {
   await requireUser();
   const { application, loanAmount, tenureMonths } = simulateSchema.parse(
     await req.json(),
   );
-  const schedule = simulate(
-    loanAmount,
-    tenureMonths,
-    application.lessees.map(lesseeToEngineInput).filter((l) => l.grossRent > 0),
-    {
-      roi: application.roi,
-      disbursementDate: application.disbursementDate,
-      dueDay: application.dueDay,
-      moratoriumMonths: application.moratoriumMonths,
-      propertyValue: application.finalPropertyValue,
-    },
-  );
-  const fullyRepaid = schedule[schedule.length - 1].closingBalance <= 0;
-  const negativeMonths = schedule.filter(
+  const lessees = application.lessees
+    .map(lesseeToEngineInput)
+    .filter((l) => l.grossRent > 0);
+
+  const solved = solveDiscountFactor(loanAmount, tenureMonths, lessees, {
+    roi: application.roi,
+    disbursementDate: application.disbursementDate,
+    dueDay: application.dueDay,
+    moratoriumMonths: application.moratoriumMonths,
+    propertyValue: application.finalPropertyValue,
+  });
+
+  const negativeMonths = solved.schedule.filter(
     (r) => r.monthIndex > application.moratoriumMonths && r.principal < 0,
   ).length;
-  return NextResponse.json({ schedule, fullyRepaid, negativeMonths });
+  const payoffRow = solved.schedule.find(
+    (r) => r.monthIndex > 0 && r.closingBalance <= 0,
+  );
+
+  return NextResponse.json({
+    schedule: solved.schedule,
+    discountFactor: solved.discountFactor,
+    achievable: solved.achievable,
+    fullyRepaid: solved.schedule[solved.schedule.length - 1].closingBalance <= 0,
+    negativeMonths,
+    payoffMonth: payoffRow?.monthIndex ?? null,
+  });
 });

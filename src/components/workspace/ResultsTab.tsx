@@ -3,25 +3,20 @@
 import { useState } from "react";
 import type { CalculationResult, ScheduleRow, TenureResult } from "@/lib/engine/types";
 import { dfLabel, formatCrore, formatDate, formatINR } from "@/lib/format";
-import type { ApplicationPayload } from "@/lib/validation";
-import { Badge, Button, Card, NumberInput, Select, Spinner } from "../ui";
+import { Badge, Button, Card, Select } from "../ui";
 
 export function ResultsTab({
-  app,
   result,
   stale,
   standardTenures,
   onCalculate,
   calculating,
-  update,
 }: {
-  app: ApplicationPayload;
   result: CalculationResult | null;
   stale: boolean;
   standardTenures: number[];
   onCalculate: () => void;
   calculating: boolean;
-  update: (fn: (a: ApplicationPayload) => ApplicationPayload) => void;
 }) {
   if (!result) {
     return (
@@ -77,7 +72,10 @@ export function ResultsTab({
 
       <LtvTrendCard result={result} />
       <ScheduleCard result={result} />
-      <ProposedAmountCard app={app} result={result} update={update} />
+      <p className="text-xs text-slate-400">
+        To build a schedule for a specific proposed amount, use the Repayment
+        schedule tab.
+      </p>
     </div>
   );
 }
@@ -317,104 +315,6 @@ function ScheduleCard({ result }: { result: CalculationResult }) {
           ? "Amber rows have a negative principal component (rent doesn't cover interest that month — the balance temporarily grows). The eligibility is reduced to remove them."
           : "Every month recovers a positive principal at this amount."}
       </p>
-    </Card>
-  );
-}
-
-function ProposedAmountCard({
-  app,
-  result,
-  update,
-}: {
-  app: ApplicationPayload;
-  result: CalculationResult;
-  update: (fn: (a: ApplicationPayload) => ApplicationPayload) => void;
-}) {
-  const tenureOptions = result.tenureResults.map((r) => ({
-    value: String(r.tenureMonths),
-    label: `${r.tenureMonths} months`,
-  }));
-  const [tenure, setTenure] = useState(
-    String(app.proposedTenure ?? result.tenureResults[0]?.tenureMonths ?? 180),
-  );
-  const [amount, setAmount] = useState<number | null>(app.proposedAmount);
-  const [out, setOut] = useState<{
-    schedule: ScheduleRow[];
-    fullyRepaid: boolean;
-    negativeMonths: number;
-  } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function run() {
-    if (!amount) return;
-    setBusy(true);
-    update((a) => ({ ...a, proposedAmount: amount, proposedTenure: Number(tenure) }));
-    const res = await fetch("/api/simulate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        application: { ...app, proposedAmount: amount, proposedTenure: Number(tenure) },
-        loanAmount: amount,
-        tenureMonths: Number(tenure),
-      }),
-    });
-    setBusy(false);
-    if (res.ok) setOut(await res.json());
-  }
-
-  return (
-    <Card title="Proposed amount — what-if schedule">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-64">
-          <span className="mb-1 block text-xs font-medium text-slate-500">
-            Proposed loan amount
-          </span>
-          <NumberInput value={amount} min={0} onChange={setAmount} />
-        </div>
-        <div className="w-44">
-          <span className="mb-1 block text-xs font-medium text-slate-500">Tenure</span>
-          <Select value={tenure} onChange={setTenure} options={tenureOptions} />
-        </div>
-        <Button onClick={run} disabled={busy || !amount}>
-          {busy ? (
-            <span className="flex items-center gap-2">
-              <Spinner /> Simulating…
-            </span>
-          ) : (
-            "Simulate"
-          )}
-        </Button>
-        {result.tenureResults[0] && (
-          <button
-            className="text-xs font-medium text-blue-600 hover:text-blue-800"
-            onClick={() => {
-              const r = result.tenureResults.find(
-                (t) => String(t.tenureMonths) === tenure,
-              );
-              if (r) setAmount(Math.floor(r.adjustedEligibility));
-            }}
-          >
-            Use computed eligibility
-          </button>
-        )}
-      </div>
-      {out && (
-        <div className="mt-4 space-y-3">
-          <div className="flex flex-wrap gap-2 text-sm">
-            {out.fullyRepaid ? (
-              <Badge tone="green">Fully repaid within tenure</Badge>
-            ) : (
-              <Badge tone="red">NOT fully repaid within tenure</Badge>
-            )}
-            {out.negativeMonths > 0 ? (
-              <Badge tone="amber">{out.negativeMonths} month(s) with negative principal</Badge>
-            ) : (
-              <Badge tone="green">No negative amortization</Badge>
-            )}
-          </div>
-          <ScheduleTable rows={out.schedule} />
-        </div>
-      )}
     </Card>
   );
 }

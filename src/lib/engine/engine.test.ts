@@ -6,6 +6,8 @@ import {
   discountFactorAt,
   maxEligibility,
   simulate,
+  solveDiscountFactor,
+  withUniformDiscountFactor,
 } from "./engine";
 import type { EngineParams, LesseeInput } from "./types";
 
@@ -167,6 +169,52 @@ describe("calculate()", () => {
     expect(ut.perLessee).toHaveLength(1);
     expect(ut.totalEligibility).toBeCloseTo(ut.perLessee[0].adjustedEligibility, 6);
     expect(ut.effectiveTenureMonths).toBeLessThanOrEqual(180);
+  });
+});
+
+describe("solving the discount factor for a proposed loan and tenure", () => {
+  it("finds the cover that closes the loan exactly at tenure end", () => {
+    const solved = solveDiscountFactor(1_000_000_000, 180, [lessee], params);
+    expect(solved.achievable).toBe(true);
+    expect(solved.discountFactor).toBeGreaterThan(0);
+    expect(solved.discountFactor).toBeLessThanOrEqual(1);
+    const last = solved.schedule[solved.schedule.length - 1];
+    expect(last.closingBalance).toBeCloseTo(0, 6);
+    // One notch less cover must leave a balance outstanding.
+    const short = simulate(
+      1_000_000_000,
+      180,
+      withUniformDiscountFactor([lessee], solved.discountFactor - 0.01),
+      params,
+    );
+    expect(short[short.length - 1].closingBalance).toBeGreaterThan(0);
+  });
+
+  it("needs a bigger cover for a shorter tenure", () => {
+    const long = solveDiscountFactor(900_000_000, 180, [lessee], params);
+    const short = solveDiscountFactor(900_000_000, 120, [lessee], params);
+    expect(short.discountFactor).toBeGreaterThan(long.discountFactor);
+  });
+
+  it("reports when even the full net rent cannot repay in time", () => {
+    const solved = solveDiscountFactor(5_000_000_000, 120, [lessee], params);
+    expect(solved.achievable).toBe(false);
+    expect(solved.discountFactor).toBe(1);
+    expect(solved.schedule[solved.schedule.length - 1].closingBalance).toBeGreaterThan(0);
+  });
+
+  it("overrides per-escalation factors with the solved one", () => {
+    const stepped = {
+      ...lessee,
+      escalations: lessee.escalations.map((e, i) =>
+        i === 1 ? { ...e, discountFactor: 0.5 } : e,
+      ),
+    };
+    const solved = solveDiscountFactor(900_000_000, 180, [stepped], params);
+    const dfs = new Set(
+      solved.schedule.filter((r) => r.netRent > 0).map((r) => r.discountFactor.toFixed(6)),
+    );
+    expect(dfs.size).toBe(1);
   });
 });
 

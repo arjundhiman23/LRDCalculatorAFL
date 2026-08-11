@@ -72,5 +72,23 @@ export async function saveApplication(id: string, raw: unknown): Promise<void> {
         position: { notIn: data.lessees.map((l) => l.position) },
       },
     });
+
+    if (data.manualRtr) {
+      const rtr = {
+        enabled: data.manualRtr.enabled,
+        openingBalance: data.manualRtr.openingBalance,
+        roi: data.manualRtr.roi,
+        discountFactor: data.manualRtr.discountFactor,
+        startDate: isoToDate(data.manualRtr.startDate)!,
+        months: data.manualRtr.months,
+      };
+      await tx.manualRtr.upsert({
+        where: { applicationId: id },
+        create: { applicationId: id, ...rtr },
+        update: rtr,
+      });
+    } else {
+      await tx.manualRtr.deleteMany({ where: { applicationId: id } });
+    }
   });
 }

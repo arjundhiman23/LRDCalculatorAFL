@@ -1,60 +1,46 @@
-/** Manual RTR computation shared by the API route, Excel export and report. */
+/** Manual RTR computation shared by the API routes, Excel export and report. */
 import { prisma } from "./db";
 import { simulate } from "./engine/engine";
 import type { ScheduleRow } from "./engine/types";
-import { applicationToPayload, dateToISO, lesseeToEngineInput } from "./serialize";
-
-export interface ManualRtrConfig {
-  openingBalance: number;
-  roi: number;
-  cashCover: number;
-  startDate: string;
-  months: number;
-}
+import { applicationToPayload, lesseeToEngineInput } from "./serialize";
+import type { ApplicationPayload, ManualRtrPayload } from "./validation";
 
 export interface ManualRtrResult {
-  config: ManualRtrConfig;
-  /** Whether a config has been saved (vs. showing defaults). */
-  configured: boolean;
+  config: ManualRtrPayload;
+  /** Whether the RTR run-off is switched on for this application. */
+  enabled: boolean;
   schedule: ScheduleRow[];
+  /** Month at which the balance clears, or null if not within the horizon. */
+  payoff: { monthIndex: number; dueDate: string } | null;
 }
 
-/** The application's total net rent stream, scaled by the manual cash cover,
- * amortizing the manually entered opening balance. */
-export async function computeManualRtr(
-  applicationId: string,
-): Promise<ManualRtrResult | null> {
-  const app = await prisma.application.findUnique({
-    where: { id: applicationId },
-    include: { lessees: true, manualRtr: true },
-  });
-  if (!app) return null;
-  const rtr = app.manualRtr;
-  const config: ManualRtrConfig = rtr
-    ? {
-        openingBalance: rtr.openingBalance,
-        roi: rtr.roi,
-        cashCover: rtr.cashCover,
-        startDate: dateToISO(rtr.startDate)!,
-        months: rtr.months,
-      }
-    : {
-        openingBalance: 0,
-        roi: app.roi,
-        cashCover: 0.7,
-        startDate: dateToISO(app.disbursementDate)!,
-        months: 60,
-      };
+export function defaultManualRtr(app: ApplicationPayload): ManualRtrPayload {
+  return {
+    enabled: false,
+    openingBalance: 0,
+    roi: app.roi,
+    discountFactor: 0.7,
+    startDate: app.disbursementDate,
+    months: 60,
+  };
+}
 
-  const payload = applicationToPayload(app);
-  const lessees = payload.lessees
+/** The application's total net rent stream, scaled by the RTR's own
+ * discounting factor, amortizing the manually entered opening balance. */
+export function computeManualRtr(app: ApplicationPayload): ManualRtrResult {
+  const config = app.manualRtr ?? defaultManualRtr(app);
+  const lessees = app.lessees
     .map(lesseeToEngineInput)
     .filter((l) => l.grossRent > 0)
-    // Manual RTR applies its own cash cover to the *net rent* stream.
-    .map((l) => ({ ...l, discountFactor: config.cashCover }));
+    // The RTR applies its own single factor to the whole net rent stream.
+    .map((l) => ({
+      ...l,
+      discountFactor: config.discountFactor,
+      escalations: l.escalations.map((e) => ({ ...e, discountFactor: null })),
+    }));
 
   const schedule =
-    config.openingBalance > 0 && lessees.length > 0
+    config.enabled && config.openingBalance > 0 && lessees.length > 0
       ? simulate(config.openingBalance, config.months, lessees, {
           roi: config.roi,
           disbursementDate: config.startDate,
@@ -63,5 +49,25 @@ export async function computeManualRtr(
         })
       : [];
 
-  return { config, configured: !!rtr, schedule };
+  const payoffRow = schedule.find((r) => r.monthIndex > 0 && r.closingBalance <= 0);
+  return {
+    config,
+    enabled: config.enabled,
+    schedule,
+    payoff: payoffRow
+      ? { monthIndex: payoffRow.monthIndex, dueDate: payoffRow.dueDate }
+      : null,
+  };
+}
+
+/** Same, loaded from the database (used by the export and report). */
+export async function computeManualRtrById(
+  applicationId: string,
+): Promise<ManualRtrResult | null> {
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { lessees: true, manualRtr: true },
+  });
+  if (!app) return null;
+  return computeManualRtr(applicationToPayload(app));
 }

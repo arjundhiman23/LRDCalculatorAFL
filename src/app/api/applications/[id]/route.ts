@@ -18,7 +18,7 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
   const { id } = await params;
   const app = await prisma.application.findUnique({
     where: { id },
-    include: { lessees: true },
+    include: { lessees: true, manualRtr: true },
   });
   if (!app) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ application: applicationToPayload(app) });
@@ -32,7 +32,7 @@ export const PUT = handler(async (req: Request, { params }: Ctx) => {
   await saveApplication(id, await req.json());
   const app = await prisma.application.findUniqueOrThrow({
     where: { id },
-    include: { lessees: true },
+    include: { lessees: true, manualRtr: true },
   });
   return NextResponse.json({ application: applicationToPayload(app) });
 });

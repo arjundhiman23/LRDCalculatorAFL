@@ -130,9 +130,10 @@ model ManualRtr {
   id             String      @id @default(cuid())
   application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   applicationId  String      @unique
+  enabled        Boolean     @default(true)
   openingBalance Float       @default(0)
   roi            Float       @default(0.15)
-  cashCover      Float       @default(0.7)
+  discountFactor Float       @default(0.7)
   startDate      DateTime
   months         Int         @default(60)
 }

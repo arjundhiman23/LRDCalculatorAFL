@@ -6,6 +6,7 @@ import { firstDueDate } from "@/lib/engine/dates";
 import { formatCrore, formatINR } from "@/lib/format";
 import { lesseeToEngineInput } from "@/lib/serialize";
 import type { ApplicationPayload, LesseePayload } from "@/lib/validation";
+import { defaultManualRtr } from "@/lib/manualRtr";
 import { Badge, Card, DateInput, Field, NumberInput, PercentInput, Select, TextInput } from "../ui";
 
 export function InputsTab({
@@ -180,23 +181,24 @@ export function InputsTab({
         </div>
 
         <div className="mt-5 border-t border-slate-100 pt-4">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-              checked={app.uniqueTenureMode}
-              onChange={(e) =>
-                update((a) => ({ ...a, uniqueTenureMode: e.target.checked }))
-              }
+          <Field label="Offer a different tenure to each lessee (Unique Tenure)">
+            <Select
+              value={app.uniqueTenureMode ? "yes" : "no"}
+              onChange={(v) => update((a) => ({ ...a, uniqueTenureMode: v === "yes" }))}
+              options={[
+                { value: "no", label: "No" },
+                { value: "yes", label: "Yes" },
+              ]}
             />
-            Offer a different tenure to each lessee (Unique Tenure)
-          </label>
+          </Field>
           <p className="mt-1 text-xs text-slate-400">
             When enabled, each lessee&apos;s rent stream supports its own loan with its
             own tenure (set per lessee below); the total is the consolidated
             eligibility.
           </p>
         </div>
+
+        <ManualRtrSection app={app} update={update} />
       </Card>
 
       <Card
@@ -265,6 +267,73 @@ export function InputsTab({
           </span>
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** Manual RTR switch and inputs, available here on the main input sheet as
+ * well as on the Manual RTR tab (both edit the same saved configuration). */
+export function ManualRtrSection({
+  app,
+  update,
+}: {
+  app: ApplicationPayload;
+  update: (fn: (a: ApplicationPayload) => ApplicationPayload) => void;
+}) {
+  const rtr = app.manualRtr ?? defaultManualRtr(app);
+  const setRtr = (patch: Partial<typeof rtr>) =>
+    update((a) => ({ ...a, manualRtr: { ...(a.manualRtr ?? defaultManualRtr(a)), ...patch } }));
+
+  return (
+    <div className="mt-5 border-t border-slate-100 pt-4">
+      <Field
+        label="Manual RTR (run off an existing balance)"
+        hint="For balance transfers and part-disbursement cases"
+      >
+        <Select
+          value={rtr.enabled ? "yes" : "no"}
+          onChange={(v) => setRtr({ enabled: v === "yes" })}
+          options={[
+            { value: "no", label: "No" },
+            { value: "yes", label: "Yes" },
+          ]}
+        />
+      </Field>
+      {rtr.enabled && (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <Field label="Opening balance">
+            <NumberInput
+              value={rtr.openingBalance || null}
+              min={0}
+              onChange={(v) => setRtr({ openingBalance: v ?? 0 })}
+            />
+          </Field>
+          <Field label="ROI (annual)">
+            <PercentInput value={rtr.roi} onChange={(v) => setRtr({ roi: v })} />
+          </Field>
+          <Field label="Discounting factor" hint="Applied to total net rent">
+            <NumberInput
+              value={rtr.discountFactor}
+              min={0}
+              step="0.05"
+              onChange={(v) => setRtr({ discountFactor: Math.min(1, v ?? 0) })}
+            />
+          </Field>
+          <Field label="Start date">
+            <DateInput
+              value={rtr.startDate}
+              onChange={(v) => v && setRtr({ startDate: v })}
+            />
+          </Field>
+          <Field label="Months">
+            <NumberInput
+              value={rtr.months}
+              min={1}
+              onChange={(v) => setRtr({ months: Math.max(1, Math.round(v ?? 1)) })}
+            />
+          </Field>
+        </div>
+      )}
     </div>
   );
 }
