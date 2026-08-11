@@ -1,7 +1,17 @@
 /** Mapping between Prisma rows and the client-facing JSON payloads. */
-import type { Application, Lessee, ManualRtr } from "@prisma/client";
+import type {
+  Application,
+  Lessee,
+  ManualRtr,
+  PostDisbursementEvent,
+} from "@prisma/client";
+import type { PostDisbursementEvent as PostDisbursementEventInput } from "./engine/postDisbursement";
 import type { EscalationEvent, LesseeInput } from "./engine/types";
-import type { ApplicationPayload, LesseePayload } from "./validation";
+import type {
+  ApplicationPayload,
+  LesseePayload,
+  PostDisbursementEventPayload,
+} from "./validation";
 
 export function dateToISO(d: Date | null): string | null {
   if (!d) return null;
@@ -43,8 +53,26 @@ export function lesseeToPayload(l: Lessee): LesseePayload {
   };
 }
 
+export function postDisbursementEventToPayload(
+  e: PostDisbursementEvent,
+): PostDisbursementEventPayload {
+  return {
+    effectiveDate: dateToISO(e.effectiveDate)!,
+    outstandingBalance: e.outstandingBalance,
+    additionalDisbursement: e.additionalDisbursement,
+    repayment: e.repayment,
+    revisedRoi: e.revisedRoi,
+    revisedEmi: e.revisedEmi,
+    note: e.note,
+  };
+}
+
 export function applicationToPayload(
-  app: Application & { lessees: Lessee[]; manualRtr?: ManualRtr | null },
+  app: Application & {
+    lessees: Lessee[];
+    manualRtr?: ManualRtr | null;
+    postDisbursementEvents?: PostDisbursementEvent[];
+  },
 ): ApplicationPayload & { id: string; updatedAt: string } {
   return {
     id: app.id,
@@ -80,6 +108,24 @@ export function applicationToPayload(
           months: app.manualRtr.months,
         }
       : null,
+    postDisbursementEvents: [...(app.postDisbursementEvents ?? [])]
+      .sort((a, b) => a.position - b.position)
+      .map(postDisbursementEventToPayload),
+  };
+}
+
+/** Convert a stored/entered event to the engine input shape. */
+export function eventToEngineInput(
+  e: PostDisbursementEventPayload,
+): PostDisbursementEventInput {
+  return {
+    effectiveDate: e.effectiveDate,
+    outstandingBalance: e.outstandingBalance,
+    additionalDisbursement: e.additionalDisbursement,
+    repayment: e.repayment,
+    revisedRoi: e.revisedRoi,
+    revisedEmi: e.revisedEmi,
+    note: e.note,
   };
 }
 

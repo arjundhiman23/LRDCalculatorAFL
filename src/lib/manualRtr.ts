@@ -66,7 +66,7 @@ export async function computeManualRtrById(
 ): Promise<ManualRtrResult | null> {
   const app = await prisma.application.findUnique({
     where: { id: applicationId },
-    include: { lessees: true, manualRtr: true },
+    include: { lessees: true, manualRtr: true, postDisbursementEvents: true },
   });
   if (!app) return null;
   return computeManualRtr(applicationToPayload(app));

@@ -68,6 +68,31 @@ model Application {
   lessees         Lessee[]
   reconciliations ReconciliationEntry[]
   manualRtr       ManualRtr?
+  postDisbursementEvents PostDisbursementEvent[]
+}
+
+/// A change to an already-disbursed loan, taking effect on a date: an
+/// additional disbursement, a prepayment, or a rate reset. The instalment stays
+/// tied to the rent unless overridden, so the tenure absorbs the change.
+model PostDisbursementEvent {
+  id            String      @id @default(cuid())
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  applicationId String
+  position      Int
+  /// Any day of the month; need not be a due date.
+  effectiveDate DateTime
+  /// Actual outstanding balance as at the effective date, as read off the loan
+  /// system. Null keeps the projected balance.
+  outstandingBalance     Float?
+  additionalDisbursement Float   @default(0)
+  repayment              Float   @default(0)
+  /// Annual rate from this date onward; null keeps the rate in force.
+  revisedRoi             Float?
+  /// Fixed instalment from this date onward; null keeps it rent-linked.
+  revisedEmi             Float?
+  note                   String  @default("")
+
+  @@unique([applicationId, position])
 }
 
 model Lessee {

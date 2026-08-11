@@ -90,5 +90,24 @@ export async function saveApplication(id: string, raw: unknown): Promise<void> {
     } else {
       await tx.manualRtr.deleteMany({ where: { applicationId: id } });
     }
+
+    // Events are positional and freely reordered in the UI, so the simplest
+    // correct save is to replace the set.
+    await tx.postDisbursementEvent.deleteMany({ where: { applicationId: id } });
+    if (data.postDisbursementEvents.length > 0) {
+      await tx.postDisbursementEvent.createMany({
+        data: data.postDisbursementEvents.map((e, i) => ({
+          applicationId: id,
+          position: i + 1,
+          effectiveDate: isoToDate(e.effectiveDate)!,
+          outstandingBalance: e.outstandingBalance,
+          additionalDisbursement: e.additionalDisbursement,
+          repayment: e.repayment,
+          revisedRoi: e.revisedRoi,
+          revisedEmi: e.revisedEmi,
+          note: e.note,
+        })),
+      });
+    }
   });
 }

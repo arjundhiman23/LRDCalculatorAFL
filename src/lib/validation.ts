@@ -39,6 +39,19 @@ export const lesseeSchema = z.object({
   remark: z.string().max(2000).default(""),
 });
 
+/** A dated change to a disbursed loan. Every field beyond the date is
+ * optional in effect: an event may move money, reset the rate, fix the
+ * instalment, or simply restate the outstanding balance. */
+export const postDisbursementEventSchema = z.object({
+  effectiveDate: isoDate,
+  outstandingBalance: z.number().min(0).nullable(),
+  additionalDisbursement: z.number().min(0),
+  repayment: z.number().min(0),
+  revisedRoi: z.number().min(0.001).max(1).nullable(),
+  revisedEmi: z.number().min(0).nullable(),
+  note: z.string().max(500).default(""),
+});
+
 export const manualRtrSchema = z.object({
   enabled: z.boolean(),
   openingBalance: z.number().min(0),
@@ -69,6 +82,7 @@ export const applicationSchema = z.object({
   proposedTenure: z.number().int().min(1).max(600).nullable(),
   lessees: z.array(lesseeSchema).min(1),
   manualRtr: manualRtrSchema.nullable(),
+  postDisbursementEvents: z.array(postDisbursementEventSchema).default([]),
 });
 
 export type ApplicationPayload = z.infer<typeof applicationSchema>;
@@ -107,9 +121,11 @@ export const reconciliationSchema = z.object({
 });
 
 export type ManualRtrPayload = z.infer<typeof manualRtrSchema>;
+export type PostDisbursementEventPayload = z.infer<typeof postDisbursementEventSchema>;
 
-export const simulateSchema = z.object({
+/** Post-disbursement run for the loan as actually disbursed. The events are
+ * taken from the payload so the tab can preview before saving. */
+export const postDisbursementSchema = z.object({
   application: applicationSchema,
   loanAmount: z.number().min(0),
-  tenureMonths: z.number().int().min(1).max(600),
 });
