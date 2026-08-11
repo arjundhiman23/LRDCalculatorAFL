@@ -7,8 +7,8 @@ import type { ApplicationPayload } from "@/lib/validation";
 import { Badge, Button, Spinner } from "../ui";
 import { InputsTab } from "./InputsTab";
 import { LeaseDetailsTab } from "./LeaseDetailsTab";
+import { PostDisbursementTab } from "./PostDisbursementTab";
 import { RecoTab } from "./RecoTab";
-import { RepaymentScheduleTab } from "./RepaymentScheduleTab";
 import { ResultsTab } from "./ResultsTab";
 import { RtrTab } from "./RtrTab";
 
@@ -16,7 +16,7 @@ const TABS = [
   { key: "inputs", label: "Inputs" },
   { key: "lease", label: "Lease details" },
   { key: "results", label: "Eligibility results" },
-  { key: "schedule", label: "Repayment schedule" },
+  { key: "postDisbursement", label: "Post disbursement" },
   { key: "reco", label: "Rental break-up & reco" },
   { key: "rtr", label: "Manual RTR" },
 ] as const;
@@ -179,9 +179,7 @@ export function Workspace({
           calculating={calculating}
         />
       )}
-      {tab === "schedule" && (
-        <RepaymentScheduleTab app={app} result={result} update={update} />
-      )}
+      {tab === "postDisbursement" && <PostDisbursementTab app={app} update={update} />}
       {tab === "reco" && <RecoTab applicationId={applicationId} app={app} />}
       {tab === "rtr" && <RtrTab app={app} update={update} />}
     </div>

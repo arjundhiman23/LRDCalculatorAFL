@@ -73,8 +73,8 @@ export function ResultsTab({
       <LtvTrendCard result={result} />
       <ScheduleCard result={result} />
       <p className="text-xs text-slate-400">
-        To build a schedule for a specific proposed amount, use the Repayment
-        schedule tab.
+        Once the loan is disbursed, record additional disbursements, prepayments and
+        rate changes on the Post disbursement tab to see the revised schedule.
       </p>
     </div>
   );
