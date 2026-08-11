@@ -22,6 +22,9 @@ computes, per tenure (180/144/120 + custom, or a unique tenure per lessee):
 - Month-by-month repayment schedule (actual/365 interest, rounded to rupees)
 - LTV trend vs property value, NPV cross-check, warnings
 - Rental break-up & credit reconciliation (expected vs actual escrow credits)
+- Post-disbursement changes — additional disbursements, prepayments, rate
+  resets and revised instalments, each on its own effective date, rebuilding the
+  schedule and the closure date
 - Manual RTR run-off for part-disbursement cases
 - Excel export and a printable PDF report
 
@@ -62,7 +65,9 @@ npm test
 
 The engine tests assert the two Goal Seek results cached in the workbook
 (₹1,341,151,534.50 at 180 months and ₹972,940,882.23 at 108 months) amortize to
-exactly zero, and that intermediate schedule rows match to the rupee.
+exactly zero, and that intermediate schedule rows match to the rupee. The
+post-disbursement tests additionally assert that a run with no changes recorded
+is identical to the plain simulation.
 
 `reference/verify_engine.py` is the original Python reference used to verify
 the reverse engineering (`python3 reference/verify_engine.py`).

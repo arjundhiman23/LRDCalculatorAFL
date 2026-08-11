@@ -127,6 +127,32 @@ the credit outcome:
 | Max 5 lessees (fixed column blocks) | Unlimited lessees; lease-detail tables render in blocks of five columns |
 | Lessor, GST/maintenance and remark held once per deal | Per lessee, falling back to the deal-level value when blank |
 | Goal Seek result reported even when early months have negative principal (a manual "reduce the amount" step) | Eligibility is **automatically reduced** until every month after the moratorium recovers a strictly positive principal; the unadjusted maximum is still reported alongside |
+| Nothing after disbursement — a changed loan means rebuilding the sheet by hand | **Post-disbursement changes** are recorded against the deal and the schedule is rebuilt from them (below) |
+
+### Post-disbursement changes
+
+The workbook stops at sanction. Once a loan is disbursed, a change may take
+effect on any date: an additional disbursement, a repayment, a revised ROI, a
+restatement of the actual outstanding balance, or a fixed instalment. From that
+date the loan runs on the same rental cash flow until the balance clears, so the
+**tenure absorbs the change** rather than the instalment.
+
+The mechanics are unchanged — actual/365, `ROUND(…, 0)` interest at each due
+date, moratorium, final-month payoff. Two things are added:
+
+1. **Part periods.** A change dated between two due dates splits that month's
+   interest at its effective date: the balance and rate in force apply to each
+   sub-period, and the sum is rounded once at the due date. With no changes this
+   is arithmetically identical to the plain simulation.
+2. **Run to closure.** The schedule ends when the balance clears rather than at
+   a fixed month, and closure is taken as the start of the trailing run of
+   months with nothing outstanding — so a disbursement after an early payoff
+   re-opens the loan instead of being ignored.
+
+Unlike eligibility, nothing here is auto-adjusted. A fixed instalment or a large
+additional disbursement can leave months where the instalment does not cover the
+interest, or a balance that never clears; those are facts about a live loan, so
+they are reported as warnings.
 
 ## 4. Quirks to preserve / decide on
 

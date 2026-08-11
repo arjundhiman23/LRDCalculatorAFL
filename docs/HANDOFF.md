@@ -56,12 +56,37 @@ Key vocabulary in the code:
 - **`adjustedEligibility`** — the headline, sanctionable number: reduced until
   **every** month after the moratorium recovers a strictly positive principal.
   `wasAdjusted` says whether a reduction happened.
-- **`solveDiscountFactor(loan, tenure)`** — the inverse problem used by the
-  Repayment Schedule tab: given a fixed loan and tenure, what cash cover closes
-  the loan exactly at tenure end?
+- **`solveDiscountFactor(loan, tenure)`** — the inverse problem: given a fixed
+  loan and tenure, what cash cover closes the loan exactly at tenure end?
 - **`solveCleanDiscountFactor`** — the smallest cover that also avoids negative
-  amortization; it necessarily repays *before* the tenure ends, so the UI offers
-  it as an alternative rather than a replacement.
+  amortization; it necessarily repays *before* the tenure ends.
+
+Both solvers are still tested but no longer reachable from the UI: the tab that
+used them became the Post disbursement tab (below).
+
+## 3a. After disbursement
+
+`src/lib/engine/postDisbursement.ts` handles a loan that is already running.
+Each change carries an **effective date** — any day of the month — and may
+combine an additional disbursement, a repayment, a revised ROI, the actual
+outstanding balance as at that date, and a fixed instalment. From that date the
+loan runs on the same rental cash flow until the balance clears, so the
+**tenure absorbs the change** rather than the instalment.
+
+Two things differ from `simulate`:
+
+- A change landing mid-month **splits the interest period at its effective
+  date**, charging the old rate up to it and the new one after. Rounding stays
+  at the due date, which is why an event-free run is byte-identical to
+  `simulate` — asserted as a test.
+- The run continues **to closure** instead of to a fixed tenure. Closure is the
+  start of the trailing run of months with nothing outstanding, so a
+  disbursement after an early payoff re-opens the loan rather than being lost.
+
+Nothing is auto-adjusted here, unlike eligibility: a fixed EMI or a large
+additional disbursement can leave months where the instalment does not cover
+the interest, or a balance that never clears. Those are facts about a live
+loan, so they surface as warnings.
 
 ## 4. Features / screens
 
@@ -87,16 +112,20 @@ Workspace tabs:
    the adjusted eligibility, discounting factor (value or range), unadjusted
    maximum when reduced, closure date and NPV ratio; LTV trend; schedule with a
    toggle between adjusted and unadjusted.
-4. **Repayment schedule** — proposed loan + tenure → required discounting
-   factor, checks, and the schedule. Warns with the clean-factor alternative.
+4. **Post disbursement** — the loan as actually disbursed, plus any number of
+   dated changes (additional disbursement, repayment, revised ROI, actual
+   outstanding balance, fixed EMI). Shows the revised closure date and how far
+   the tenure moved, the money moved, the checks, and the revised schedule with
+   a toggle back to the original.
 5. **Rental break-up & reco** — contribution table (gross, gross + 18% GST −
    TDS, net excl. GST, share %) and the expected-vs-actual escrow credit grid.
 6. **Manual RTR** — run off an existing balance (balance transfer /
    part-disbursement) at its own ROI and discounting factor.
 
 Both exports cover all of it: the **XLSX** has Summary, Lease details, Rental
-break up & reco, LTV trend, one sheet per tenure, and Manual RTR; the **report**
-mirrors the same sections.
+break up & reco, LTV trend, one sheet per tenure, Post disbursement and Manual
+RTR; the **report** mirrors the same sections. The post-disbursement section
+appears only once a change has been recorded.
 
 ## 5. Code map
 
@@ -106,11 +135,14 @@ src/lib/engine/        Pure calculation engine (no framework imports)
   types.ts             Engine input/output types
   engine.ts            Simulation, eligibility, discount-factor solvers
   engine.test.ts       25 tests, incl. parity with the workbook's cached values
+  postDisbursement.ts  Dated changes applied to a disbursed loan
+  postDisbursement.test.ts  24 tests, incl. parity with an event-free simulate()
 src/lib/
   validation.ts        Zod schemas — the contract between client and API
   applications.ts      saveApplication (upsert lessees, delete removed ones)
   serialize.ts         Prisma row  <->  client payload
   manualRtr.ts         Manual RTR computation (payload and DB variants)
+  postDisbursement.ts  Post-disbursement run shared by API, export and report
   reportData.ts        Lease-details rows, rental break-up, reco grid, chunking
   format.ts            INR/percent/date/discount-factor formatting
   auth.ts, db.ts, api.ts
@@ -121,11 +153,11 @@ prisma/                schema.prisma, three migrations, seed.ts
 
 API routes: `auth/{login,logout,me}`, `applications` (list/create),
 `applications/[id]` (GET/PUT/PATCH/DELETE), `applications/[id]/reconciliation`,
-`applications/[id]/export`, `calculate`, `simulate`, `manual-rtr`, `settings`,
-`users`.
+`applications/[id]/export`, `calculate`, `post-disbursement`, `manual-rtr`,
+`settings`, `users`.
 
-`calculate`, `simulate` and `manual-rtr` are **stateless** — they take the
-current form payload, so the UI can preview without saving.
+`calculate`, `post-disbursement` and `manual-rtr` are **stateless** — they take
+the current form payload, so the UI can preview without saving.
 
 ## 6. Running locally
 
@@ -174,6 +206,13 @@ Before real users: set a strong `AUTH_SECRET` and replace the seeded accounts.
   is visible.
 - **Negative amortization** is allowed inside the schedule but never in the
   headline eligibility (see `adjustedEligibility`).
+- **Post disbursement moves the tenure, not the instalment.** The instalment
+  stays tied to the rent unless the RM fixes it, so an additional disbursement
+  pushes the closure date out and a prepayment pulls it in. The `proposedAmount`
+  and `proposedTenure` fields carry the disbursed amount and the sanctioned
+  tenure; only the amount feeds the run, the tenure is reference.
+- **Events replace rather than merge on save.** They are positional and freely
+  reordered in the UI, so `saveApplication` deletes and recreates the set.
 - **Uniform factor when solving.** `solveDiscountFactor` applies one factor
   across the whole schedule, overriding per-escalation factors. An open question
   (below) is whether it should instead scale the user's stepped factors.
@@ -190,6 +229,9 @@ Before real users: set a strong `AUTH_SECRET` and replace the seeded accounts.
    "principal must be positive" rule, which would raise eligibility slightly?
 3. In Unique Tenure mode the consolidated total sums each lessee's **adjusted**
    eligibility — confirm that is what the credit team wants.
-4. Not built (never requested): application status/approval workflow, audit
+4. Post disbursement records what happened to a loan but does not reconcile it
+   against the actual escrow credits on the Reco tab; the RM restates the
+   outstanding balance by hand when the two drift apart.
+5. Not built (never requested): application status/approval workflow, audit
    trail, per-user access restrictions (any signed-in user can open any
    application), and automated tests above the engine layer (no API or UI tests).
