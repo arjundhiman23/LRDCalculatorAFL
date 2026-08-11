@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import { dfLabel, formatDate, formatINR, formatPct } from "@/lib/format";
 import { computeManualRtr } from "@/lib/manualRtr";
+import { computePostDisbursementForApp } from "@/lib/postDisbursement";
 import { chunkLessees, leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
@@ -25,6 +26,7 @@ export default async function ReportPage({
       lessees: { orderBy: { position: "asc" } },
       reconciliations: { orderBy: { dueDate: "asc" } },
       manualRtr: true,
+      postDisbursementEvents: { orderBy: { position: "asc" } },
     },
   });
   if (!app) notFound();
@@ -59,10 +61,14 @@ export default async function ReportPage({
   const rtr = computeManualRtr(payload);
   const showRtr = rtr.enabled && rtr.schedule.length > 0;
   const rtrPayoff = rtr.payoff;
+  const pd = computePostDisbursementForApp(payload);
+  // Only worth a section once something has actually changed after disbursement.
+  const showPd = pd !== null && pd.events.length > 0;
   const numEligibility = 5;
   const numUnique = result.uniqueTenure ? 6 : null;
   const numSchedule = result.uniqueTenure ? 7 : 6;
-  const numRtr = numSchedule + 1;
+  const numPostDisb = numSchedule + 1;
+  const numRtr = numSchedule + (showPd ? 2 : 1);
   const cellCls =
     "[&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5";
   const headCls =
@@ -363,6 +369,110 @@ export default async function ReportPage({
                   <td>{formatDate(r.dueDate)}</td>
                   <td className="text-right">{r.discountFactor.toFixed(2)}</td>
                   <td className="text-right">{formatINR(r.cash)}</td>
+                  <td className="text-right">{formatINR(r.interest)}</td>
+                  <td className="text-right">{formatINR(r.principal)}</td>
+                  <td className="text-right">{formatINR(r.closingBalance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {showPd && pd && (
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-semibold">
+            {numPostDisb}. Post disbursement — revised schedule
+          </h2>
+          <p className="mb-2 text-xs text-slate-500">
+            Disbursed {formatINR(payload.proposedAmount ?? 0)} on{" "}
+            {formatDate(payload.disbursementDate)} at {formatPct(payload.roi)} ·{" "}
+            {pd.baselineClosure
+              ? `originally closing ${formatDate(pd.baselineClosure.dueDate)} (${pd.baselineTenureMonths} months)`
+              : "originally not closing"}{" "}
+            ·{" "}
+            {pd.closure
+              ? `now closing ${formatDate(pd.closure.dueDate)} (${pd.revisedTenureMonths} months${
+                  pd.tenureChangeMonths
+                    ? `, ${pd.tenureChangeMonths > 0 ? "+" : ""}${pd.tenureChangeMonths}`
+                    : ""
+                })`
+              : "the balance does not clear"}
+          </p>
+
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className={headCls}>
+                <th>Effective date</th>
+                <th className="!text-right">Additional disbursement</th>
+                <th className="!text-right">Repayment</th>
+                <th className="!text-right">Revised ROI</th>
+                <th className="!text-right">Revised EMI</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pd.events.map((e, i) => (
+                <tr key={i} className={cellCls}>
+                  <td>{formatDate(e.effectiveDate)}</td>
+                  <td className="text-right">
+                    {e.additionalDisbursement
+                      ? formatINR(e.additionalDisbursement)
+                      : "—"}
+                  </td>
+                  <td className="text-right">
+                    {e.repayment ? formatINR(e.repayment) : "—"}
+                  </td>
+                  <td className="text-right">
+                    {e.revisedRoi == null ? "—" : formatPct(e.revisedRoi)}
+                  </td>
+                  <td className="text-right">
+                    {e.revisedEmi == null ? "—" : formatINR(e.revisedEmi)}
+                  </td>
+                  <td>{e.note || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {pd.warnings.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-xs text-amber-700">
+              {pd.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          )}
+
+          <table className="mt-3 w-full border-collapse text-xs">
+            <thead>
+              <tr className="[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left">
+                <th>#</th>
+                <th>Due date</th>
+                <th className="!text-right">ROI</th>
+                <th className="!text-right">Disbursed</th>
+                <th className="!text-right">Repaid</th>
+                <th className="!text-right">Interest</th>
+                <th className="!text-right">Principal</th>
+                <th className="!text-right">POS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pd.schedule.map((r) => (
+                <tr
+                  key={r.monthIndex}
+                  className="[&_td]:border [&_td]:border-slate-200 [&_td]:px-2 [&_td]:py-0.5"
+                >
+                  <td>{r.monthIndex}</td>
+                  <td>{formatDate(r.dueDate)}</td>
+                  <td className="text-right">{formatPct(r.roi)}</td>
+                  <td className="text-right">
+                    {r.additionalDisbursement
+                      ? formatINR(r.additionalDisbursement)
+                      : "—"}
+                  </td>
+                  <td className="text-right">
+                    {r.repayment ? formatINR(r.repayment) : "—"}
+                  </td>
                   <td className="text-right">{formatINR(r.interest)}</td>
                   <td className="text-right">{formatINR(r.principal)}</td>
                   <td className="text-right">{formatINR(r.closingBalance)}</td>

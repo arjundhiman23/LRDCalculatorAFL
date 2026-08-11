@@ -7,6 +7,7 @@ import { calculate } from "@/lib/engine/engine";
 import type { ScheduleRow, TenureResult } from "@/lib/engine/types";
 import { dfLabel } from "@/lib/format";
 import { computeManualRtr } from "@/lib/manualRtr";
+import { computePostDisbursementForApp } from "@/lib/postDisbursement";
 import { chunkLessees, leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
@@ -63,6 +64,7 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
       lessees: { orderBy: { position: "asc" } },
       reconciliations: { orderBy: { dueDate: "asc" } },
       manualRtr: true,
+      postDisbursementEvents: { orderBy: { position: "asc" } },
     },
   });
   if (!app) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -270,6 +272,113 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
       addScheduleSheet(wb, `UT ${l.lesseeName}`.slice(0, 31), l.schedule);
     }
     addScheduleSheet(wb, "UT consolidated", result.uniqueTenure.consolidatedSchedule);
+  }
+
+  // ---- Post disbursement sheet (only once the loan has been disbursed) ----
+  const pd = computePostDisbursementForApp(payload);
+  if (pd) {
+    const pdWs = wb.addWorksheet("Post disbursement");
+    pdWs.getColumn(1).width = 30;
+    pdWs.getColumn(2).width = 22;
+    const addPd = (label: string, value: ExcelJS.CellValue, fmt?: string) => {
+      const row = pdWs.addRow([label, value]);
+      row.getCell(1).font = { bold: true };
+      if (fmt) row.getCell(2).numFmt = fmt;
+    };
+    addPd("Disbursed amount", payload.proposedAmount ?? 0, MONEY);
+    addPd("Disbursement date", payload.disbursementDate);
+    addPd("ROI at disbursement", payload.roi, PCT);
+    addPd(
+      "Original closure",
+      pd.baselineClosure
+        ? `${pd.baselineClosure.dueDate} (${pd.baselineTenureMonths} months)`
+        : "Does not close",
+    );
+    addPd(
+      "Revised closure",
+      pd.closure
+        ? `${pd.closure.dueDate} (${pd.revisedTenureMonths} months)`
+        : "Does not close",
+    );
+    addPd(
+      "Change in tenure (months)",
+      pd.tenureChangeMonths === null ? "—" : pd.tenureChangeMonths,
+    );
+    addPd("Additional disbursed", pd.totalAdditionalDisbursement, MONEY);
+    addPd("Repayments received", pd.totalRepayment, MONEY);
+    addPd("Interest over the life", pd.totalInterest, MONEY);
+
+    if (pd.events.length) {
+      pdWs.addRow([]);
+      pdWs.addRow(["Changes after disbursement"]).font = { bold: true };
+      const evHead = pdWs.addRow([
+        "Effective date",
+        "Additional disbursement",
+        "Repayment",
+        "Revised ROI",
+        "Revised EMI",
+        "Outstanding stated",
+        "Note",
+      ]);
+      evHead.font = { bold: true };
+      for (let c = 3; c <= 7; c++) pdWs.getColumn(c).width = 22;
+      for (const e of pd.events) {
+        const row = pdWs.addRow([
+          e.effectiveDate,
+          e.additionalDisbursement,
+          e.repayment,
+          e.revisedRoi ?? "—",
+          e.revisedEmi ?? "—",
+          e.outstandingBalance ?? "—",
+          e.note ?? "",
+        ]);
+        row.getCell(2).numFmt = MONEY;
+        row.getCell(3).numFmt = MONEY;
+        if (e.revisedRoi != null) row.getCell(4).numFmt = PCT;
+        if (e.revisedEmi != null) row.getCell(5).numFmt = MONEY;
+        if (e.outstandingBalance != null) row.getCell(6).numFmt = MONEY;
+      }
+    }
+
+    if (pd.warnings.length) {
+      pdWs.addRow([]);
+      pdWs.addRow(["Warnings"]).font = { bold: true };
+      for (const msg of pd.warnings) pdWs.addRow([msg]);
+    }
+
+    pdWs.addRow([]);
+    const schedHead = pdWs.addRow([
+      "Sr no",
+      "Due date",
+      "Days",
+      "ROI",
+      "Opening balance",
+      "Disbursed",
+      "Repaid",
+      "Interest",
+      "Principal",
+      "Instalment",
+      "Closing balance (POS)",
+    ]);
+    schedHead.font = { bold: true };
+    for (let c = 3; c <= 11; c++) pdWs.getColumn(c).width = 18;
+    for (const r of pd.schedule) {
+      const row = pdWs.addRow([
+        r.monthIndex,
+        r.dueDate,
+        r.days,
+        r.roi,
+        r.openingBalance,
+        r.additionalDisbursement,
+        r.repayment,
+        r.interest,
+        r.principal,
+        r.instalment,
+        r.closingBalance,
+      ]);
+      row.getCell(4).numFmt = PCT;
+      for (let c = 5; c <= 11; c++) row.getCell(c).numFmt = MONEY;
+    }
   }
 
   // ---- Manual RTR sheet (when switched on with a balance) ----
