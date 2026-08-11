@@ -14,6 +14,11 @@ interface SimulationResponse {
   fullyRepaid: boolean;
   negativeMonths: number;
   payoffMonth: number | null;
+  clean: {
+    discountFactor: number;
+    payoffMonth: number;
+    payoffDate: string | null;
+  } | null;
 }
 
 /** Proposed loan amount + tenure → the discounting factor needed for the loan
@@ -108,6 +113,17 @@ export function RepaymentScheduleTab({
           </p>
         )}
       </Card>
+
+      {out && out.clean && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Closing exactly at {tenure} months needs a factor of{" "}
+          {out.discountFactor.toFixed(4)}, which leaves {out.negativeMonths} early
+          month(s) where the rent does not cover the interest. A factor of{" "}
+          <strong>{out.clean.discountFactor.toFixed(4)}</strong> keeps every month&apos;s
+          principal positive and clears the loan at month {out.clean.payoffMonth}
+          {out.clean.payoffDate ? ` (${formatDate(out.clean.payoffDate)})` : ""}.
+        </div>
+      )}
 
       {out && (
         <>

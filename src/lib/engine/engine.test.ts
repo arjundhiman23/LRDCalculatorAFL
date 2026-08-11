@@ -6,6 +6,7 @@ import {
   discountFactorAt,
   maxEligibility,
   simulate,
+  solveCleanDiscountFactor,
   solveDiscountFactor,
   withUniformDiscountFactor,
 } from "./engine";
@@ -201,6 +202,28 @@ describe("solving the discount factor for a proposed loan and tenure", () => {
     expect(solved.achievable).toBe(false);
     expect(solved.discountFactor).toBe(1);
     expect(solved.schedule[solved.schedule.length - 1].closingBalance).toBeGreaterThan(0);
+  });
+
+  it("offers a higher clean factor when exact closure implies negative months", () => {
+    const exact = solveDiscountFactor(1_000_000_000, 180, [lessee], params);
+    const negative = exact.schedule.filter(
+      (r) => r.monthIndex > 0 && r.principal < 0,
+    ).length;
+    expect(negative).toBeGreaterThan(0);
+
+    const clean = solveCleanDiscountFactor(1_000_000_000, 180, [lessee], params);
+    expect(clean.achievable).toBe(true);
+    expect(clean.discountFactor).toBeGreaterThan(exact.discountFactor);
+    expect(
+      clean.schedule.every(
+        (r) => r.monthIndex === 0 || r.openingBalance <= 0 || r.principal > 0,
+      ),
+    ).toBe(true);
+    // Clearing every month positively means the loan closes before tenure end.
+    const payoff = clean.schedule.find(
+      (r) => r.monthIndex > 0 && r.closingBalance <= 0,
+    )!;
+    expect(payoff.monthIndex).toBeLessThan(180);
   });
 
   it("overrides per-escalation factors with the solved one", () => {

@@ -238,6 +238,42 @@ export function solveDiscountFactor(
   };
 }
 
+/** Smallest uniform cash cover that repays within the tenure *and* keeps every
+ * month's principal recovery positive. More cover means more cash to
+ * principal, so negative months disappear as the factor rises — the loan then
+ * closes before the end of the tenure. */
+export function solveCleanDiscountFactor(
+  loan: number,
+  months: number,
+  lessees: LesseeInput[],
+  params: EngineParams,
+): SolvedDiscountFactor {
+  const scheduleAt = (df: number) =>
+    simulate(loan, months, withUniformDiscountFactor(lessees, df), params);
+  const ok = (df: number): boolean => {
+    const rows = scheduleAt(df);
+    if (rows[rows.length - 1].closingBalance > 0) return false;
+    return rows.every(
+      (r) =>
+        r.monthIndex <= params.moratoriumMonths ||
+        r.openingBalance <= 0 ||
+        r.principal > 0,
+    );
+  };
+
+  if (loan <= 0 || !ok(1)) {
+    return { discountFactor: 1, achievable: false, schedule: scheduleAt(1) };
+  }
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < BISECTION_ITERATIONS; i++) {
+    const mid = (lo + hi) / 2;
+    if (ok(mid)) hi = mid;
+    else lo = mid;
+  }
+  return { discountFactor: hi, achievable: true, schedule: scheduleAt(hi) };
+}
+
 function payoffMonth(rows: ScheduleRow[]): number {
   for (const r of rows) {
     if (r.monthIndex > 0 && r.closingBalance <= 0) return r.monthIndex;
