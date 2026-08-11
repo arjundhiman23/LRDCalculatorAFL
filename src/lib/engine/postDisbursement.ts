@@ -189,6 +189,8 @@ export interface PostDisbursementResult {
   tenureChangeMonths: number | null;
   /** Months still to run from the last effective date to closure. */
   residualMonths: number | null;
+  /** Months by which closure overruns the sanctioned tenure, when one is set. */
+  overrunMonths: number | null;
   balanceAtLastEvent: number | null;
   totalAdditionalDisbursement: number;
   totalRepayment: number;
@@ -258,6 +260,13 @@ export function computePostDisbursement(
         `${first.dueDate}: the balance grows instead of reducing.`,
     );
   }
+  const sanctioned = options.originalTenureMonths ?? null;
+  if (closure && sanctioned && closure.monthIndex > sanctioned) {
+    warnings.push(
+      `Closure now falls ${closure.monthIndex - sanctioned} month(s) beyond the ` +
+        `sanctioned tenure of ${sanctioned} months.`,
+    );
+  }
   if (
     closure &&
     baselineClosure &&
@@ -289,6 +298,8 @@ export function computePostDisbursement(
         : null,
     residualMonths:
       closure && lastEventRow ? closure.monthIndex - lastEventRow.monthIndex : null,
+    overrunMonths:
+      closure && sanctioned ? Math.max(0, closure.monthIndex - sanctioned) : null,
     balanceAtLastEvent: lastEventRow
       ? lastEventRow.openingBalance +
         lastEventRow.balanceAdjustment +

@@ -410,6 +410,11 @@ function SummaryCards({
             ? `${result.revisedTenureMonths} months from disbursement`
             : "The instalment never clears the balance"}
         </p>
+        {!!result.overrunMonths && (
+          <p className="mt-1 text-xs text-amber-700">
+            {result.overrunMonths} months beyond the sanctioned tenure
+          </p>
+        )}
       </Card>
       <Card>
         <div className="text-xs font-medium uppercase tracking-wide text-slate-400">

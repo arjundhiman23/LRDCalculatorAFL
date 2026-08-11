@@ -287,6 +287,31 @@ describe("several events over the life of the loan", () => {
   });
 });
 
+describe("sanctioned tenure", () => {
+  it("flags a closure that overruns it", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 200_000_000 })],
+      { originalTenureMonths: 120 },
+    );
+    expect(result.overrunMonths).toBe(result.revisedTenureMonths! - 120);
+    expect(result.overrunMonths!).toBeGreaterThan(0);
+    expect(result.warnings.some((w) => w.includes("beyond the sanctioned tenure"))).toBe(
+      true,
+    );
+  });
+
+  it("says nothing when the loan still closes inside it", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: 240,
+    });
+    expect(result.overrunMonths).toBe(0);
+    expect(result.warnings.some((w) => w.includes("sanctioned tenure"))).toBe(false);
+  });
+});
+
 describe("edge cases", () => {
   it("an event dated before disbursement is applied at disbursement, with a warning", () => {
     const result = computePostDisbursement(LOAN, [lessee], params, [
