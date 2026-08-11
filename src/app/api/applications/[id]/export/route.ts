@@ -5,8 +5,9 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import type { ScheduleRow, TenureResult } from "@/lib/engine/types";
+import { dfLabel } from "@/lib/format";
 import { computeManualRtr } from "@/lib/manualRtr";
-import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
+import { chunkLessees, leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -25,6 +26,7 @@ function addScheduleSheet(
     { header: "Due date", key: "date", width: 12 },
     { header: "Days", key: "days", width: 6 },
     { header: "Net rent", key: "net", width: 16, style: { numFmt: MONEY } },
+    { header: "Disc. factor", key: "df", width: 12 },
     { header: "Discounted CF", key: "cash", width: 16, style: { numFmt: MONEY } },
     { header: "Opening balance", key: "open", width: 18, style: { numFmt: MONEY } },
     { header: "Interest", key: "int", width: 14, style: { numFmt: MONEY } },
@@ -40,6 +42,7 @@ function addScheduleSheet(
       date: r.dueDate,
       days: r.days,
       net: r.netRent,
+      df: Math.round(r.discountFactor * 10000) / 10000,
       cash: r.cash,
       open: r.openingBalance,
       int: r.interest,
@@ -105,28 +108,31 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
   const header = ws.addRow([
     "Tenure (months)",
     "Closure date",
-    "Max eligibility",
-    "Eligibility w/o negative amortization",
+    "Eligibility",
+    "Discounting factor",
+    "Unadjusted maximum",
     "NPV ratio",
-    "Negative amortization?",
+    "Adjusted for negative amortization?",
   ]);
   header.font = { bold: true };
   ws.getColumn(3).width = 22;
-  ws.getColumn(4).width = 30;
-  ws.getColumn(5).width = 12;
-  ws.getColumn(6).width = 22;
+  ws.getColumn(4).width = 18;
+  ws.getColumn(5).width = 22;
+  ws.getColumn(6).width = 12;
+  ws.getColumn(7).width = 32;
   for (const r of result.tenureResults) {
     const row = ws.addRow([
       r.tenureMonths,
       r.closureDate,
+      r.adjustedEligibility,
+      dfLabel(r.discountFactorRange),
       r.maxEligibility,
-      r.strictEligibility,
       r.npvRatio,
-      r.hasNegativeAmortization ? "Yes" : "No",
+      r.wasAdjusted ? "Yes" : "No",
     ]);
     row.getCell(3).numFmt = MONEY;
-    row.getCell(4).numFmt = MONEY;
-    row.getCell(5).numFmt = "0.0000";
+    row.getCell(5).numFmt = MONEY;
+    row.getCell(6).numFmt = "0.0000";
   }
   if (result.warnings.length) {
     ws.addRow([]);
@@ -139,16 +145,25 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
   const activeLessees = payload.lessees.filter((l) => l.grossRent > 0);
   const ld = wb.addWorksheet("Lease details");
   ld.getColumn(1).width = 34;
-  const ldHeader = ld.addRow(["Lease details", ...activeLessees.map((l) => l.name || `Lessee ${l.position}`)]);
-  ldHeader.font = { bold: true };
-  for (let c = 2; c <= activeLessees.length + 1; c++) ld.getColumn(c).width = 26;
-  for (const row of leaseDetailsRows(payload, activeLessees)) {
-    const r = ld.addRow([row.label, ...row.values.map((v) => v ?? "—")]);
-    r.getCell(1).font = { bold: true };
-    if (["Current rent (gross)", "Security deposit", "Rental per sq.ft"].includes(row.label)) {
-      for (let c = 2; c <= activeLessees.length + 1; c++) r.getCell(c).numFmt = MONEY;
+  for (let c = 2; c <= 6; c++) ld.getColumn(c).width = 26;
+  // Five lessees per block, wrapping into further blocks below.
+  chunkLessees(activeLessees).forEach((block, i) => {
+    if (i > 0) ld.addRow([]);
+    const head = ld.addRow([
+      "Lease details",
+      ...block.map((l) => l.name || `Lessee ${l.position}`),
+    ]);
+    head.font = { bold: true };
+    for (const row of leaseDetailsRows(payload, block)) {
+      const r = ld.addRow([row.label, ...row.values.map((v) => v ?? "—")]);
+      r.getCell(1).font = { bold: true };
+      if (
+        ["Current rent (gross)", "Security deposit", "Rental per sq.ft"].includes(row.label)
+      ) {
+        for (let c = 2; c <= block.length + 1; c++) r.getCell(c).numFmt = MONEY;
+      }
     }
-  }
+  });
 
   // ---- Rental break up & reco sheet ----
   const rb = wb.addWorksheet("Rental break up & reco");

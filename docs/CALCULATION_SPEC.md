@@ -115,6 +115,19 @@ match the Excel row-by-row to the rupee.
 - **Manual RTR** sheet: same amortization mechanics applied to a manually entered
   balance/DF/ROI to build a repayment track record (e.g. part-disbursement cases).
 
+## 3a. Deliberate extensions beyond the workbook
+
+The web app keeps the maths above but lifts layout-driven limits and hardens
+the credit outcome:
+
+| Workbook | Web app |
+|---|---|
+| Max 5 escalations per lessee (columns C–H) | Unlimited escalations |
+| One cash cover per lessee (row 51 thresholds unused in practice) | Optional cash cover **per escalation**, applied from that escalation date onward; blank carries the previous factor forward |
+| Max 5 lessees (fixed column blocks) | Unlimited lessees; lease-detail tables render in blocks of five columns |
+| Lessor, GST/maintenance and remark held once per deal | Per lessee, falling back to the deal-level value when blank |
+| Goal Seek result reported even when early months have negative principal (a manual "reduce the amount" step) | Eligibility is **automatically reduced** until every month after the moratorium recovers a strictly positive principal; the unadjusted maximum is still reported alongside |
+
 ## 4. Quirks to preserve / decide on
 
 1. **Interest rounding**: rounded to whole rupees each month (`ROUND(…, 0)`), actual/365.

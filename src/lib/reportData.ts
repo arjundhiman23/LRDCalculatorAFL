@@ -37,14 +37,19 @@ export function leaseDetailsRows(
   const escalationSummary = (l: (typeof L)[number]) =>
     l.firstEscalationDate && l.escalations.length > 0
       ? l.escalations
-          .map(
-            (e, i) =>
-              `${(e.rate * 100).toFixed(1)}%${i === 0 ? ` from ${l.firstEscalationDate}` : ` after ${e.monthsAfterPrevious}m`}`,
-          )
+          .map((e, i) => {
+            const when =
+              i === 0 ? ` from ${l.firstEscalationDate}` : ` after ${e.monthsAfterPrevious}m`;
+            const df =
+              e.discountFactor === null || e.discountFactor === undefined
+                ? ""
+                : ` (DF ${e.discountFactor})`;
+            return `${(e.rate * 100).toFixed(1)}%${when}${df}`;
+          })
           .join(", ")
       : "None";
   return [
-    { label: "Lessor name", values: L.map(() => app.lessorName || null) },
+    { label: "Lessor name", values: L.map((l) => l.lessorName || app.lessorName || null) },
     { label: "Lessee name", values: L.map((l) => l.name || null) },
     { label: "Lessee rating (if available)", values: L.map((l) => l.rating || null) },
     { label: "Agreement date", values: L.map((l) => l.agreementDate) },
@@ -68,13 +73,20 @@ export function leaseDetailsRows(
     { label: "Renewal clause (if any)", values: L.map((l) => l.renewalClause || null) },
     { label: "Escalation", values: L.map(escalationSummary) },
     { label: "Security deposit", values: L.map((l) => l.securityDeposit) },
+    { label: "Same lessee occupancy since", values: L.map((l) => l.occupancySince || null) },
     {
       label: "GST, taxes & maintenance borne by",
-      values: L.map(() => app.gstTaxesBorneBy || null),
+      values: L.map((l) => l.gstTaxesBorneBy || app.gstTaxesBorneBy || null),
     },
-    { label: "Same lessee occupancy since", values: L.map((l) => l.occupancySince || null) },
-    { label: "Remark", values: L.map(() => app.remark || null) },
+    { label: "Remark", values: L.map((l) => l.remark || app.remark || null) },
   ];
+}
+
+/** Split lessees into blocks of five columns for readable wide tables. */
+export function chunkLessees<T>(lessees: T[], size = 5): T[][] {
+  const blocks: T[][] = [];
+  for (let i = 0; i < lessees.length; i += size) blocks.push(lessees.slice(i, i + size));
+  return blocks;
 }
 
 export interface BreakupRow {

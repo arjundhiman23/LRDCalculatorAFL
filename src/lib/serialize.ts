@@ -18,6 +18,7 @@ export function lesseeToPayload(l: Lessee): LesseePayload {
     position: l.position,
     name: l.name,
     rating: l.rating,
+    lessorName: l.lessorName,
     grossRent: l.grossRent,
     tdsRate: l.tdsRate,
     propertyTaxRate: l.propertyTaxRate,
@@ -37,6 +38,8 @@ export function lesseeToPayload(l: Lessee): LesseePayload {
     renewalClause: l.renewalClause,
     securityDeposit: l.securityDeposit,
     occupancySince: l.occupancySince,
+    gstTaxesBorneBy: l.gstTaxesBorneBy,
+    remark: l.remark,
   };
 }
 

@@ -31,6 +31,14 @@ export function formatPct(value: number | null | undefined, digits = 2): string 
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+/** Cash cover shown as a single value, or a range when it steps over time. */
+export function dfLabel(range: { min: number; max: number }): string {
+  const round = (v: number) => Math.round(v * 10000) / 10000;
+  return round(range.min) === round(range.max)
+    ? round(range.max).toFixed(2)
+    : `${round(range.min).toFixed(2)}–${round(range.max).toFixed(2)}`;
+}
+
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");

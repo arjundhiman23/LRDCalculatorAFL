@@ -30,6 +30,7 @@ export default async function AdminSettingsPage() {
           defaultTdsRate: settings.defaultTdsRate,
           defaultDueDay: settings.defaultDueDay as 5 | 15,
           standardTenures: settings.standardTenures,
+          initialLessees: settings.initialLessees,
         }}
         initialUsers={users}
       />

@@ -4,9 +4,9 @@ import { PrintButton } from "@/components/PrintButton";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
-import { formatDate, formatINR, formatPct } from "@/lib/format";
+import { dfLabel, formatDate, formatINR, formatPct } from "@/lib/format";
 import { computeManualRtr } from "@/lib/manualRtr";
-import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
+import { chunkLessees, leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +48,10 @@ export default async function ReportPage({
     result.tenureResults.find((r) => r.tenureMonths === payload.proposedTenure) ??
     result.tenureResults[0];
   const activeLessees = payload.lessees.filter((l) => l.grossRent > 0);
-  const leaseRows = leaseDetailsRows(payload, activeLessees);
+  const leaseBlocks = chunkLessees(activeLessees).map((block) => ({
+    block,
+    rows: leaseDetailsRows(payload, block),
+  }));
   const breakup = rentalBreakup(payload, activeLessees);
   const hasCredits = app.reconciliations.length > 0;
   const grid = hasCredits ? recoGrid(payload, app.lessees, app.reconciliations, 12) : null;
@@ -148,26 +151,31 @@ export default async function ReportPage({
 
       <section className="mb-6">
         <h2 className="mb-2 text-base font-semibold">3. Lease details</h2>
-        <table className="w-full border-collapse text-xs">
-          <thead>
-            <tr className={headCls}>
-              <th className="w-1/4">Field</th>
-              {activeLessees.map((l) => (
-                <th key={l.position}>{l.name || `Lessee ${l.position}`}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {leaseRows.map((row) => (
-              <tr key={row.label} className={cellCls}>
-                <td className="bg-slate-50 font-medium">{row.label}</td>
-                {row.values.map((v, i) => (
-                  <td key={i}>{formatLeaseValue(row.label, v)}</td>
+        {leaseBlocks.map(({ block, rows }, bi) => (
+          <table
+            key={bi}
+            className={`w-full border-collapse text-xs ${bi > 0 ? "mt-3" : ""}`}
+          >
+            <thead>
+              <tr className={headCls}>
+                <th className="w-1/4">Field</th>
+                {block.map((l) => (
+                  <th key={l.position}>{l.name || `Lessee ${l.position}`}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.label} className={cellCls}>
+                  <td className="bg-slate-50 font-medium">{row.label}</td>
+                  {row.values.map((v, i) => (
+                    <td key={i}>{formatLeaseValue(row.label, v)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
       </section>
 
       <section className="mb-6">
@@ -274,8 +282,9 @@ export default async function ReportPage({
             <tr className="[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left">
               <th>Tenure</th>
               <th>Closure date</th>
-              <th>Max eligibility</th>
-              <th>Without neg. amortization</th>
+              <th>Eligibility</th>
+              <th>Disc. factor</th>
+              <th>Unadjusted maximum</th>
               <th>NPV ratio</th>
             </tr>
           </thead>
@@ -284,8 +293,9 @@ export default async function ReportPage({
               <tr key={r.tenureMonths} className="[&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5">
                 <td>{r.tenureMonths} months</td>
                 <td>{formatDate(r.closureDate)}</td>
-                <td className="font-semibold">{formatINR(r.maxEligibility)}</td>
-                <td>{formatINR(r.strictEligibility)}</td>
+                <td className="font-semibold">{formatINR(r.adjustedEligibility)}</td>
+                <td>{dfLabel(r.discountFactorRange)}</td>
+                <td>{r.wasAdjusted ? formatINR(r.maxEligibility) : "—"}</td>
                 <td>{r.npvRatio.toFixed(4)}</td>
               </tr>
             ))}
@@ -316,7 +326,7 @@ export default async function ReportPage({
                 <tr key={l.lesseeName} className="[&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5">
                   <td>{l.lesseeName}</td>
                   <td>{l.tenureMonths} months</td>
-                  <td>{formatINR(l.maxEligibility)}</td>
+                  <td>{formatINR(l.adjustedEligibility)}</td>
                 </tr>
               ))}
               <tr className="font-semibold [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5">
@@ -333,13 +343,14 @@ export default async function ReportPage({
         <section className="mb-6">
           <h2 className="mb-2 text-base font-semibold">
             {numSchedule}. Repayment schedule — {reportTenure.tenureMonths}{" "}
-            months at {formatINR(reportTenure.maxEligibility)}
+            months at {formatINR(reportTenure.adjustedEligibility)}
           </h2>
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="[&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left">
                 <th>#</th>
                 <th>Due date</th>
+                <th className="!text-right">DF</th>
                 <th className="!text-right">Disc. CF</th>
                 <th className="!text-right">Interest</th>
                 <th className="!text-right">Principal</th>
@@ -347,10 +358,11 @@ export default async function ReportPage({
               </tr>
             </thead>
             <tbody>
-              {reportTenure.schedule.map((r) => (
+              {reportTenure.adjustedSchedule.map((r) => (
                 <tr key={r.monthIndex} className="[&_td]:border [&_td]:border-slate-200 [&_td]:px-2 [&_td]:py-0.5">
                   <td>{r.monthIndex}</td>
                   <td>{formatDate(r.dueDate)}</td>
+                  <td className="text-right">{r.discountFactor.toFixed(2)}</td>
                   <td className="text-right">{formatINR(r.cash)}</td>
                   <td className="text-right">{formatINR(r.interest)}</td>
                   <td className="text-right">{formatINR(r.principal)}</td>

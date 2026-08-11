@@ -6,6 +6,7 @@ function lesseeData(l: LesseePayload) {
   return {
     name: l.name,
     rating: l.rating,
+    lessorName: l.lessorName,
     grossRent: l.grossRent,
     tdsRate: l.tdsRate,
     propertyTaxRate: l.propertyTaxRate,
@@ -25,6 +26,8 @@ function lesseeData(l: LesseePayload) {
     renewalClause: l.renewalClause,
     securityDeposit: l.securityDeposit,
     occupancySince: l.occupancySince,
+    gstTaxesBorneBy: l.gstTaxesBorneBy,
+    remark: l.remark,
   };
 }
 
@@ -62,5 +65,12 @@ export async function saveApplication(id: string, raw: unknown): Promise<void> {
         update: lesseeData(l),
       });
     }
+    // Lessees removed in the UI are dropped (cascades to their reconciliation).
+    await tx.lessee.deleteMany({
+      where: {
+        applicationId: id,
+        position: { notIn: data.lessees.map((l) => l.position) },
+      },
+    });
   });
 }

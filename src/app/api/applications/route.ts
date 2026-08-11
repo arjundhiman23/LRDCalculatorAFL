@@ -37,7 +37,7 @@ export const POST = handler(async (req: Request) => {
       dueDay: settings?.defaultDueDay ?? 15,
       disbursementDate: new Date(),
       lessees: {
-        create: Array.from({ length: settings?.maxLessees ?? 5 }, (_, i) => ({
+        create: Array.from({ length: settings?.initialLessees ?? 5 }, (_, i) => ({
           position: i + 1,
           name: `Lessee ${i + 1}`,
           tdsRate: settings?.defaultTdsRate ?? 0.1,

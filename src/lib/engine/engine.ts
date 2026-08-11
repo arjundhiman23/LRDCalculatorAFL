@@ -18,10 +18,12 @@ import type {
 const MAX_LOAN = 1e13;
 const BISECTION_ITERATIONS = 120;
 
-/** Resolved escalation step: from `date` onward gross rent is `gross`. */
+/** Resolved escalation step: from `date` onward gross rent is `gross` and the
+ * cash cover is `discountFactor`. */
 interface RentStep {
   date: string;
   gross: number;
+  discountFactor: number;
 }
 
 /** Cumulative escalation steps for a lessee (dates may repeat; later entries
@@ -31,10 +33,14 @@ export function rentSteps(lessee: LesseeInput): RentStep[] {
   if (!lessee.firstEscalationDate || lessee.escalations.length === 0) return steps;
   let date = lessee.firstEscalationDate;
   let gross = lessee.grossRent;
+  let df = lessee.discountFactor;
   lessee.escalations.forEach((esc, i) => {
     if (i > 0) date = edate(date, esc.monthsAfterPrevious);
     gross *= 1 + esc.rate;
-    steps.push({ date, gross });
+    if (esc.discountFactor !== null && esc.discountFactor !== undefined) {
+      df = esc.discountFactor;
+    }
+    steps.push({ date, gross, discountFactor: df });
   });
   return steps;
 }
@@ -47,6 +53,16 @@ export function grossRentAt(lessee: LesseeInput, date: string): number {
   return gross;
 }
 
+/** Cash cover in force on a date: the base factor, overridden by the latest
+ * escalation that carries its own factor. */
+export function discountFactorAt(lessee: LesseeInput, date: string): number {
+  let df = lessee.discountFactor;
+  for (const step of rentSteps(lessee)) {
+    if (compareISO(date, step.date) >= 0) df = step.discountFactor;
+  }
+  return df;
+}
+
 export function netRentAt(lessee: LesseeInput, date: string): number {
   const gross = grossRentAt(lessee, date);
   const rateDeductions =
@@ -55,7 +71,7 @@ export function netRentAt(lessee: LesseeInput, date: string): number {
 }
 
 export function cashAt(lessee: LesseeInput, date: string): number {
-  return netRentAt(lessee, date) * lessee.discountFactor;
+  return netRentAt(lessee, date) * discountFactorAt(lessee, date);
 }
 
 /** Month-by-month repayment simulation for a given loan amount.
@@ -91,6 +107,7 @@ export function simulate(
       days,
       netRent,
       cash,
+      discountFactor: netRent > 0 ? cash / netRent : 0,
       openingBalance: balance,
       interest,
       principal,
@@ -132,9 +149,10 @@ export function maxEligibility(
   return lo;
 }
 
-/** Max loan that fully amortizes by tenure end AND never produces a negative
- * principal component (i.e. discounted rent always covers interest). */
-export function strictEligibility(
+/** The sanctionable amount: fully amortizes by tenure end AND every month after
+ * the moratorium recovers a strictly positive principal (never negative, never
+ * zero) while a balance is outstanding. */
+export function adjustedEligibility(
   months: number,
   lessees: LesseeInput[],
   params: EngineParams,
@@ -143,7 +161,10 @@ export function strictEligibility(
     const rows = simulate(loan, months, lessees, params);
     if (rows[rows.length - 1].closingBalance > 0) return false;
     return rows.every(
-      (r) => r.monthIndex <= params.moratoriumMonths || r.principal >= 0,
+      (r) =>
+        r.monthIndex <= params.moratoriumMonths ||
+        r.openingBalance <= 0 || // already repaid; nothing left to recover
+        r.principal > 0,
     );
   };
   let lo = 0;
@@ -206,19 +227,34 @@ function tenureResult(
   params: EngineParams,
 ): TenureResult {
   const eligibility = maxEligibility(months, lessees, params);
-  const strict = strictEligibility(months, lessees, params);
   const schedule = simulate(eligibility, months, lessees, params);
+  const hasNegativeAmortization = schedule.some(
+    (r) => r.monthIndex > params.moratoriumMonths && r.principal < 0,
+  );
+  // When the maximum already recovers principal every month there is nothing
+  // to adjust; avoid reporting a bisection-precision difference.
+  const adjusted = hasNegativeAmortization
+    ? adjustedEligibility(months, lessees, params)
+    : eligibility;
+  const adjustedSchedule = hasNegativeAmortization
+    ? simulate(adjusted, months, lessees, params)
+    : schedule;
+  const dfs = schedule.filter((r) => r.netRent > 0).map((r) => r.discountFactor);
   return {
     tenureMonths: months,
     closureDate: edate(firstDueDate(params.disbursementDate, params.dueDay), months),
     maxEligibility: eligibility,
-    strictEligibility: strict,
+    adjustedEligibility: adjusted,
+    wasAdjusted: hasNegativeAmortization,
+    adjustedSchedule,
     payoffMonth: payoffMonth(schedule),
     npvRatio: npvRatio(eligibility, schedule, params.roi),
     ltvTrend: ltvTrend(schedule, params.propertyValue),
-    hasNegativeAmortization: schedule.some(
-      (r) => r.monthIndex > params.moratoriumMonths && r.principal < 0,
-    ),
+    hasNegativeAmortization,
+    discountFactorRange: {
+      min: dfs.length ? Math.min(...dfs) : 0,
+      max: dfs.length ? Math.max(...dfs) : 0,
+    },
     schedule,
   };
 }
@@ -233,7 +269,7 @@ function uniqueTenureResult(
       lesseeName: l.name,
       ...tenureResult(l.uniqueTenureMonths as number, [l], params),
     }));
-  const total = perLessee.reduce((s, r) => s + r.maxEligibility, 0);
+  const total = perLessee.reduce((s, r) => s + r.adjustedEligibility, 0);
   const horizon = Math.max(240, ...perLessee.map((r) => r.tenureMonths)) + 60;
   const consolidated = simulate(total, horizon, lessees, params);
   const effective = payoffMonth(consolidated);
@@ -268,11 +304,13 @@ export function calculate(input: CalculationInput): CalculationResult {
 
   const tenureResults = tenures.map((t) => tenureResult(t, activeLessees, input.params));
   for (const r of tenureResults) {
-    if (r.hasNegativeAmortization) {
+    if (r.wasAdjusted) {
+      const cut = r.maxEligibility - r.adjustedEligibility;
       warnings.push(
-        `${r.tenureMonths} months: at maximum eligibility some early months have ` +
-          `negative principal (rent does not cover interest). The strict ` +
-          `eligibility without negative amortization is lower.`,
+        `${r.tenureMonths} months: the theoretical maximum caused months where ` +
+          `rent does not cover interest, so the eligibility was reduced by ` +
+          `${Math.round(cut).toLocaleString("en-IN")} to keep every month's ` +
+          `principal recovery positive.`,
       );
     }
   }

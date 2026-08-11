@@ -9,6 +9,7 @@ interface SettingsData {
   defaultTdsRate: number;
   defaultDueDay: 5 | 15;
   standardTenures: number[];
+  initialLessees: number;
 }
 
 interface UserRow {
@@ -106,7 +107,7 @@ export function AdminPanel({
             />
           </Field>
         </div>
-        <div className="mt-3">
+        <div className="mt-3 grid grid-cols-2 gap-3">
           <Field
             label="Standard tenures (months, comma-separated)"
             hint="Each is evaluated on every calculation, like the workbook's 180/144/120 sheets"
@@ -114,6 +115,20 @@ export function AdminPanel({
             <TextInput
               value={tenuresText}
               onChange={(e) => setTenuresText(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Lessees created with a new application"
+            hint="More can be added on any application at any time"
+          >
+            <TextInput
+              value={String(settings.initialLessees)}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  initialLessees: Math.max(1, Number(e.target.value) || 1),
+                })
+              }
             />
           </Field>
         </div>

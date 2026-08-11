@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { edate, firstDueDate } from "./dates";
-import { calculate, maxEligibility, simulate } from "./engine";
+import {
+  calculate,
+  cashAt,
+  discountFactorAt,
+  maxEligibility,
+  simulate,
+} from "./engine";
 import type { EngineParams, LesseeInput } from "./types";
 
 /** The exact scenario cached inside `LRD calculator 2.0 Sept 23.xlsm`:
@@ -122,13 +128,23 @@ describe("calculate()", () => {
     expect(c).toBeGreaterThanOrEqual(d);
   });
 
-  it("strict eligibility is lower than max when negative amortization occurs", () => {
+  it("adjusts the eligibility down until every month's principal is positive", () => {
     const r180 = result.tenureResults[0];
     expect(r180.hasNegativeAmortization).toBe(true);
-    expect(r180.strictEligibility).toBeLessThan(r180.maxEligibility);
-    // At the strict amount, no month has negative principal.
-    const strictRows = simulate(r180.strictEligibility, 180, [lessee], params);
-    expect(strictRows.every((r) => r.monthIndex === 0 || r.principal >= -1e-6)).toBe(true);
+    expect(r180.wasAdjusted).toBe(true);
+    expect(r180.adjustedEligibility).toBeLessThan(r180.maxEligibility);
+    // At the adjusted amount every month recovers principal strictly > 0.
+    const rows = simulate(r180.adjustedEligibility, 180, [lessee], params);
+    expect(
+      rows.every((r) => r.monthIndex === 0 || r.openingBalance <= 0 || r.principal > 0),
+    ).toBe(true);
+    expect(r180.adjustedSchedule).toHaveLength(181);
+  });
+
+  it("leaves eligibility untouched when no month is negative", () => {
+    const clean = result.tenureResults.find((r) => !r.hasNegativeAmortization)!;
+    expect(clean.wasAdjusted).toBe(false);
+    expect(clean.adjustedEligibility).toBe(clean.maxEligibility);
   });
 
   it("NPV ratio matches the workbook's cross-check (~0.9008 at 180 months)", () => {
@@ -149,7 +165,55 @@ describe("calculate()", () => {
     expect(result.uniqueTenure).not.toBeNull();
     const ut = result.uniqueTenure!;
     expect(ut.perLessee).toHaveLength(1);
-    expect(ut.totalEligibility).toBeCloseTo(ut.perLessee[0].maxEligibility, 6);
+    expect(ut.totalEligibility).toBeCloseTo(ut.perLessee[0].adjustedEligibility, 6);
     expect(ut.effectiveTenureMonths).toBeLessThanOrEqual(180);
+  });
+});
+
+describe("per-escalation discount factor", () => {
+  const stepped = {
+    ...lessee,
+    escalations: [
+      { rate: 0.15, monthsAfterPrevious: 0, discountFactor: 0.85 },
+      { rate: 0.15, monthsAfterPrevious: 36 },
+      { rate: 0.15, monthsAfterPrevious: 36, discountFactor: 0.8 },
+    ],
+  };
+
+  it("uses the base factor before the first escalation", () => {
+    expect(discountFactorAt(stepped, "2027-08-15")).toBe(0.9);
+  });
+
+  it("switches to the escalation's factor from its date onward", () => {
+    expect(discountFactorAt(stepped, "2027-08-20")).toBe(0.85);
+    // Second escalation has no factor of its own: the previous one continues.
+    expect(discountFactorAt(stepped, "2030-08-20")).toBe(0.85);
+    expect(discountFactorAt(stepped, "2033-08-20")).toBe(0.8);
+  });
+
+  it("feeds through to the serviceable cash flow", () => {
+    // Gross 18.3M +15% = 21.045M, less 10% TDS = 18.9405M, x 0.85.
+    expect(cashAt(stepped, "2027-09-15")).toBeCloseTo(18_940_500 * 0.85, 4);
+  });
+
+  it("lowering the cover lowers the eligibility", () => {
+    const base = maxEligibility(180, [lessee], params);
+    const lower = maxEligibility(180, [stepped], params);
+    expect(lower).toBeLessThan(base);
+  });
+
+  it("supports more than five escalations", () => {
+    const many = {
+      ...lessee,
+      escalations: Array.from({ length: 9 }, (_, i) => ({
+        rate: 0.05,
+        monthsAfterPrevious: i === 0 ? 0 : 12,
+      })),
+    };
+    const rows = simulate(1_000_000, 180, [many], params);
+    // Rent keeps stepping up after the 5th escalation (2032 is the 6th year).
+    const early = rows.find((r) => r.dueDate === "2028-08-15")!;
+    const late = rows.find((r) => r.dueDate === "2034-08-15")!;
+    expect(late.netRent).toBeGreaterThan(early.netRent);
   });
 });

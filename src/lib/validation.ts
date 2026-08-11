@@ -7,12 +7,15 @@ const isoDate = z
 export const escalationSchema = z.object({
   rate: z.number().min(0).max(2),
   monthsAfterPrevious: z.number().int().min(0).max(600),
+  /** Optional cash cover from this escalation onward. */
+  discountFactor: z.number().min(0).max(1).nullable().optional(),
 });
 
 export const lesseeSchema = z.object({
   position: z.number().int().min(1),
   name: z.string().max(200),
   rating: z.string().max(100).default(""),
+  lessorName: z.string().max(300).default(""),
   grossRent: z.number().min(0),
   tdsRate: z.number().min(0).max(1),
   propertyTaxRate: z.number().min(0).max(1),
@@ -20,7 +23,7 @@ export const lesseeSchema = z.object({
   otherDeduction: z.number().min(0),
   discountFactor: z.number().min(0).max(1),
   firstEscalationDate: isoDate.nullable(),
-  escalations: z.array(escalationSchema).max(5),
+  escalations: z.array(escalationSchema),
   uniqueTenureMonths: z.number().int().min(1).max(600).nullable(),
   agreementDate: isoDate.nullable(),
   fitOutPeriod: z.string().max(200).default(""),
@@ -32,6 +35,8 @@ export const lesseeSchema = z.object({
   renewalClause: z.string().max(500).default(""),
   securityDeposit: z.number().min(0).nullable(),
   occupancySince: z.string().max(200).default(""),
+  gstTaxesBorneBy: z.string().max(200).default(""),
+  remark: z.string().max(2000).default(""),
 });
 
 export const applicationSchema = z.object({
@@ -53,7 +58,7 @@ export const applicationSchema = z.object({
   uniqueTenureMode: z.boolean(),
   proposedAmount: z.number().min(0).nullable(),
   proposedTenure: z.number().int().min(1).max(600).nullable(),
-  lessees: z.array(lesseeSchema).min(1).max(5),
+  lessees: z.array(lesseeSchema).min(1),
 });
 
 export type ApplicationPayload = z.infer<typeof applicationSchema>;
@@ -70,6 +75,7 @@ export const settingsSchema = z.object({
   defaultTdsRate: z.number().min(0).max(1),
   defaultDueDay: z.union([z.literal(5), z.literal(15)]),
   standardTenures: z.array(z.number().int().min(1).max(600)).min(1).max(6),
+  initialLessees: z.number().int().min(1).max(50),
 });
 
 export const createUserSchema = z.object({

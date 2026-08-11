@@ -30,7 +30,8 @@ model Settings {
   defaultTdsRate     Float    @default(0.1)
   defaultDueDay      Int      @default(15)
   standardTenures    Int[]    @default([180, 144, 120])
-  maxLessees         Int      @default(5)
+  /// Lessees created with a new application; more can be added at any time.
+  initialLessees     Int      @default(5)
   updatedAt          DateTime @updatedAt
 }
 
@@ -77,6 +78,8 @@ model Lessee {
 
   name             String @default("")
   rating           String @default("")
+  /// Optional lessor specific to this lessee; falls back to the application's.
+  lessorName       String @default("")
   grossRent        Float  @default(0)
   tdsRate          Float  @default(0.1)
   propertyTaxRate  Float  @default(0)
@@ -84,7 +87,7 @@ model Lessee {
   otherDeduction   Float  @default(0)
   discountFactor   Float  @default(0.9)
   firstEscalationDate DateTime?
-  /// JSON array of { rate: number, monthsAfterPrevious: number } (max 5).
+  /// JSON array of { rate, monthsAfterPrevious, discountFactor? } — unbounded.
   escalations      Json   @default("[]")
   uniqueTenureMonths Int?
 
@@ -99,6 +102,8 @@ model Lessee {
   renewalClause   String    @default("")
   securityDeposit Float?
   occupancySince  String    @default("")
+  gstTaxesBorneBy String    @default("")
+  remark          String    @default("")
 
   reconciliations ReconciliationEntry[]
 

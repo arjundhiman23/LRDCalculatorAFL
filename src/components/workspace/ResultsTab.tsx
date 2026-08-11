@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { CalculationResult, ScheduleRow, TenureResult } from "@/lib/engine/types";
-import { formatCrore, formatDate, formatINR } from "@/lib/format";
+import { dfLabel, formatCrore, formatDate, formatINR } from "@/lib/format";
 import type { ApplicationPayload } from "@/lib/validation";
 import { Badge, Button, Card, NumberInput, Select, Spinner } from "../ui";
 
@@ -91,20 +91,32 @@ function TenureCard({ r, custom }: { r: TenureResult; custom: boolean }) {
             {r.tenureMonths} months {custom && <Badge tone="blue">custom</Badge>}
           </div>
           <div className="mt-1 text-2xl font-semibold text-slate-900">
-            {formatCrore(r.maxEligibility)}
+            {formatCrore(r.adjustedEligibility)}
           </div>
-          <div className="text-xs text-slate-400">{formatINR(r.maxEligibility)}</div>
+          <div className="text-xs text-slate-400">
+            {formatINR(r.adjustedEligibility)}
+          </div>
         </div>
-        {r.hasNegativeAmortization ? (
-          <Badge tone="amber">neg. amortization</Badge>
+        {r.wasAdjusted ? (
+          <Badge tone="amber">adjusted</Badge>
         ) : (
           <Badge tone="green">clean</Badge>
         )}
       </div>
       <dl className="mt-4 space-y-1.5 text-sm">
+        {r.wasAdjusted && (
+          <div className="flex justify-between">
+            <dt className="text-slate-500">Unadjusted maximum</dt>
+            <dd className="text-slate-400 line-through">
+              {formatCrore(r.maxEligibility)}
+            </dd>
+          </div>
+        )}
         <div className="flex justify-between">
-          <dt className="text-slate-500">Without neg. amortization</dt>
-          <dd className="font-medium text-slate-700">{formatCrore(r.strictEligibility)}</dd>
+          <dt className="text-slate-500">Discounting factor</dt>
+          <dd className="font-medium text-slate-700">
+            {dfLabel(r.discountFactorRange)}
+          </dd>
         </div>
         <div className="flex justify-between">
           <dt className="text-slate-500">Closure date</dt>
@@ -132,7 +144,7 @@ function UniqueTenureSection({
             <th className="py-1.5 pr-3 font-medium">Lessee</th>
             <th className="py-1.5 pr-3 font-medium">Tenure</th>
             <th className="py-1.5 pr-3 font-medium">Eligibility</th>
-            <th className="py-1.5 pr-3 font-medium">Without neg. am.</th>
+            <th className="py-1.5 pr-3 font-medium">Disc. factor</th>
             <th className="py-1.5 font-medium">Notes</th>
           </tr>
         </thead>
@@ -141,11 +153,15 @@ function UniqueTenureSection({
             <tr key={l.lesseeName} className="border-t border-slate-50">
               <td className="py-2 pr-3 font-medium text-slate-700">{l.lesseeName}</td>
               <td className="py-2 pr-3 text-slate-600">{l.tenureMonths} months</td>
-              <td className="py-2 pr-3 text-slate-800">{formatINR(l.maxEligibility)}</td>
-              <td className="py-2 pr-3 text-slate-600">{formatINR(l.strictEligibility)}</td>
+              <td className="py-2 pr-3 text-slate-800">
+                {formatINR(l.adjustedEligibility)}
+              </td>
+              <td className="py-2 pr-3 text-slate-600">
+                {dfLabel(l.discountFactorRange)}
+              </td>
               <td className="py-2">
-                {l.hasNegativeAmortization ? (
-                  <Badge tone="amber">neg. amortization</Badge>
+                {l.wasAdjusted ? (
+                  <Badge tone="amber">adjusted</Badge>
                 ) : (
                   <Badge tone="green">clean</Badge>
                 )}
@@ -215,6 +231,7 @@ export function ScheduleTable({ rows }: { rows: ScheduleRow[] }) {
             <th className="px-3 py-2 font-medium">Due date</th>
             <th className="px-3 py-2 font-medium">Days</th>
             <th className="px-3 py-2 text-right font-medium">Net rent</th>
+            <th className="px-3 py-2 text-right font-medium">DF</th>
             <th className="px-3 py-2 text-right font-medium">Disc. CF</th>
             <th className="px-3 py-2 text-right font-medium">Opening</th>
             <th className="px-3 py-2 text-right font-medium">Interest</th>
@@ -235,6 +252,9 @@ export function ScheduleTable({ rows }: { rows: ScheduleRow[] }) {
               <td className="px-3 py-1.5">{formatDate(r.dueDate)}</td>
               <td className="px-3 py-1.5 text-slate-400">{r.days}</td>
               <td className="px-3 py-1.5 text-right">{formatINR(r.netRent)}</td>
+              <td className="px-3 py-1.5 text-right text-slate-400">
+                {r.discountFactor.toFixed(2)}
+              </td>
               <td className="px-3 py-1.5 text-right">{formatINR(r.cash)}</td>
               <td className="px-3 py-1.5 text-right">{formatINR(r.openingBalance)}</td>
               <td className="px-3 py-1.5 text-right">{formatINR(r.interest)}</td>
@@ -258,24 +278,44 @@ export function ScheduleTable({ rows }: { rows: ScheduleRow[] }) {
 function ScheduleCard({ result }: { result: CalculationResult }) {
   const options = result.tenureResults.map((r) => ({
     value: String(r.tenureMonths),
-    label: `${r.tenureMonths} months — ${formatCrore(r.maxEligibility)}`,
+    label: `${r.tenureMonths} months — ${formatCrore(r.adjustedEligibility)}`,
   }));
   const [selected, setSelected] = useState(options[0]?.value ?? "");
+  const [basis, setBasis] = useState<"adjusted" | "max">("adjusted");
   const chosen = result.tenureResults.find((r) => String(r.tenureMonths) === selected);
   if (!chosen) return null;
+  const showMax = basis === "max" && chosen.wasAdjusted;
+  const rows = showMax ? chosen.schedule : chosen.adjustedSchedule;
   return (
     <Card
-      title="Repayment schedule (at maximum eligibility)"
+      title={`Repayment schedule (at ${showMax ? "unadjusted maximum" : "eligibility"}: ${formatCrore(
+        showMax ? chosen.maxEligibility : chosen.adjustedEligibility,
+      )})`}
       actions={
-        <div className="w-64">
-          <Select value={selected} onChange={setSelected} options={options} />
+        <div className="flex items-center gap-2">
+          {chosen.wasAdjusted && (
+            <div className="w-52">
+              <Select
+                value={basis}
+                onChange={(v) => setBasis(v as "adjusted" | "max")}
+                options={[
+                  { value: "adjusted", label: "Adjusted eligibility" },
+                  { value: "max", label: "Unadjusted maximum" },
+                ]}
+              />
+            </div>
+          )}
+          <div className="w-64">
+            <Select value={selected} onChange={setSelected} options={options} />
+          </div>
         </div>
       }
     >
-      <ScheduleTable rows={chosen.schedule} />
+      <ScheduleTable rows={rows} />
       <p className="mt-2 text-xs text-slate-400">
-        Amber rows have a negative principal component (rent doesn&apos;t cover
-        interest that month — the balance temporarily grows).
+        {showMax
+          ? "Amber rows have a negative principal component (rent doesn't cover interest that month — the balance temporarily grows). The eligibility is reduced to remove them."
+          : "Every month recovers a positive principal at this amount."}
       </p>
     </Card>
   );
@@ -351,10 +391,10 @@ function ProposedAmountCard({
               const r = result.tenureResults.find(
                 (t) => String(t.tenureMonths) === tenure,
               );
-              if (r) setAmount(Math.floor(r.strictEligibility));
+              if (r) setAmount(Math.floor(r.adjustedEligibility));
             }}
           >
-            Use strict eligibility
+            Use computed eligibility
           </button>
         )}
       </div>

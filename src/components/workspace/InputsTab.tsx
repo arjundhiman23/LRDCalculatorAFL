@@ -23,6 +23,55 @@ export function InputsTab({
       lessees: a.lessees.map((l, i) => (i === idx ? { ...l, ...patch } : l)),
     }));
 
+  const addLessee = () =>
+    update((a) => {
+      const position = Math.max(0, ...a.lessees.map((l) => l.position)) + 1;
+      const template = a.lessees[a.lessees.length - 1];
+      return {
+        ...a,
+        lessees: [
+          ...a.lessees,
+          {
+            ...template,
+            position,
+            name: `Lessee ${position}`,
+            rating: "",
+            lessorName: "",
+            grossRent: 0,
+            otherDeduction: 0,
+            firstEscalationDate: null,
+            escalations: [],
+            uniqueTenureMonths: null,
+            agreementDate: null,
+            fitOutPeriod: "",
+            leaseStartDate: null,
+            leaseEndDate: null,
+            lockInMonths: null,
+            areaSqft: null,
+            rentOnMonthlySales: "",
+            renewalClause: "",
+            securityDeposit: null,
+            occupancySince: "",
+            gstTaxesBorneBy: "",
+            remark: "",
+          },
+        ],
+      };
+    });
+
+  const removeLessee = (idx: number) => {
+    const l = app.lessees[idx];
+    if (
+      !window.confirm(
+        `Remove ${l.name || `Lessee ${l.position}`}? Any reconciliation entries for this lessee are deleted when you save.`,
+      )
+    ) {
+      return;
+    }
+    update((a) => ({ ...a, lessees: a.lessees.filter((_, i) => i !== idx) }));
+    setActiveLessee((i) => Math.max(0, Math.min(i, app.lessees.length - 2)));
+  };
+
   const lessee = app.lessees[activeLessee];
   const valuations = [app.valuation1, app.valuation2, app.valuation3].filter(
     (v): v is number => !!v && v > 0,
@@ -150,7 +199,18 @@ export function InputsTab({
         </div>
       </Card>
 
-      <Card title="Lessees & rentals" className="lg:col-span-2">
+      <Card
+        title={`Lessees & rentals (${app.lessees.length})`}
+        className="lg:col-span-2"
+        actions={
+          <button
+            className="text-xs font-medium text-blue-600 hover:text-blue-800"
+            onClick={addLessee}
+          >
+            + Add lessee
+          </button>
+        }
+      >
         <div className="mb-4 flex flex-wrap gap-1">
           {app.lessees.map((l, i) => (
             <button
@@ -179,6 +239,8 @@ export function InputsTab({
             key={lessee.position}
             lessee={lessee}
             uniqueTenureMode={app.uniqueTenureMode}
+            canRemove={app.lessees.length > 1}
+            onRemove={() => removeLessee(activeLessee)}
             onChange={(patch) => setLessee(activeLessee, patch)}
           />
         )}
@@ -210,17 +272,25 @@ export function InputsTab({
 function LesseeEditor({
   lessee,
   uniqueTenureMode,
+  canRemove,
+  onRemove,
   onChange,
 }: {
   lessee: LesseePayload;
   uniqueTenureMode: boolean;
+  canRemove: boolean;
+  onRemove: () => void;
   onChange: (patch: Partial<LesseePayload>) => void;
 }) {
   const escalations = lessee.escalations;
 
   const setEscalation = (
     idx: number,
-    patch: Partial<{ rate: number; monthsAfterPrevious: number }>,
+    patch: Partial<{
+      rate: number;
+      monthsAfterPrevious: number;
+      discountFactor: number | null;
+    }>,
   ) =>
     onChange({
       escalations: escalations.map((e, i) => (i === idx ? { ...e, ...patch } : e)),
@@ -292,7 +362,7 @@ function LesseeEditor({
               onChange={(v) => onChange({ otherDeduction: v ?? 0 })}
             />
           </Field>
-          <Field label="Discounting factor" hint="Cash cover on net rent">
+          <Field label="Discounting factor" hint="Base cash cover on net rent">
             <NumberInput
               value={lessee.discountFactor}
               min={0}
@@ -306,26 +376,25 @@ function LesseeEditor({
       <div>
         <div className="mb-2 flex items-center justify-between">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Rent escalations (up to 5)
+            Rent escalations
           </h4>
-          {escalations.length < 5 && (
-            <button
-              className="text-xs font-medium text-blue-600 hover:text-blue-800"
-              onClick={() =>
-                onChange({
-                  escalations: [
-                    ...escalations,
-                    {
-                      rate: escalations[escalations.length - 1]?.rate ?? 0.15,
-                      monthsAfterPrevious: 36,
-                    },
-                  ],
-                })
-              }
-            >
-              + Add escalation
-            </button>
-          )}
+          <button
+            className="text-xs font-medium text-blue-600 hover:text-blue-800"
+            onClick={() =>
+              onChange({
+                escalations: [
+                  ...escalations,
+                  {
+                    rate: escalations[escalations.length - 1]?.rate ?? 0.15,
+                    monthsAfterPrevious: 36,
+                    discountFactor: null,
+                  },
+                ],
+              })
+            }
+          >
+            + Add escalation
+          </button>
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Field label="First escalation date">
@@ -340,12 +409,18 @@ function LesseeEditor({
             No escalations — rent stays flat for the whole tenure.
           </p>
         ) : (
-          <table className="mt-2 w-full max-w-2xl text-sm">
+          <table className="mt-2 w-full max-w-3xl text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-400">
                 <th className="py-1 pr-3 font-medium">#</th>
                 <th className="py-1 pr-3 font-medium">Escalation %</th>
                 <th className="py-1 pr-3 font-medium">Months after previous</th>
+                <th className="py-1 pr-3 font-medium">
+                  Discounting factor
+                  <span className="ml-1 font-normal normal-case text-slate-300">
+                    (optional)
+                  </span>
+                </th>
                 <th className="py-1" />
               </tr>
             </thead>
@@ -372,6 +447,19 @@ function LesseeEditor({
                       placeholder={i === 0 ? "uses date above" : ""}
                     />
                   </td>
+                  <td className="py-1 pr-3">
+                    <NumberInput
+                      value={e.discountFactor ?? null}
+                      min={0}
+                      step="0.05"
+                      placeholder="unchanged"
+                      onChange={(v) =>
+                        setEscalation(i, {
+                          discountFactor: v === null ? null : Math.min(1, v),
+                        })
+                      }
+                    />
+                  </td>
                   <td className="py-1">
                     <button
                       className="text-xs text-red-500 hover:text-red-700"
@@ -387,8 +475,23 @@ function LesseeEditor({
             </tbody>
           </table>
         )}
+        <p className="mt-1 text-[11px] text-slate-400">
+          Leave the discounting factor blank to carry the previous one forward; set
+          it to apply a different cash cover from that escalation date onward.
+        </p>
         <EscalationPreview lessee={lessee} />
       </div>
+
+      {canRemove && (
+        <div className="border-t border-slate-100 pt-3">
+          <button
+            className="text-xs font-medium text-red-500 hover:text-red-700"
+            onClick={onRemove}
+          >
+            Remove this lessee
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -405,14 +508,17 @@ function EscalationPreview({ lessee }: { lessee: LesseePayload }) {
   const effective = steps.filter(
     (s, i) => i === steps.length - 1 || steps[i + 1].date !== s.date,
   );
+  const varies = effective.some((s) => s.discountFactor !== lessee.discountFactor);
   return (
     <div className="mt-3 rounded-lg bg-slate-50 px-4 py-3 text-xs text-slate-600">
       <span className="font-medium text-slate-500">Resulting rent timeline: </span>
       {formatINR(lessee.grossRent)} now
+      {varies && <span className="text-slate-400"> (DF {lessee.discountFactor})</span>}
       {effective.map((s) => (
         <span key={s.date}>
           {" "}
           → {formatINR(s.gross)} from {s.date}
+          {varies && <span className="text-slate-400"> (DF {s.discountFactor})</span>}
         </span>
       ))}
       {effective.length < steps.length && (

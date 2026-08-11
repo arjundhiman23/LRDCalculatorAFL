@@ -64,6 +64,7 @@ async function main() {
               ],
               uniqueTenureMonths: 180,
               leaseEndDate: new Date("2035-08-30T00:00:00Z"),
+              gstTaxesBorneBy: "GST by lessee; property tax by lessor",
             },
             { position: 2, name: "Lessee2- DEF", tdsRate: 0.1, propertyTaxRate: 0.02, insuranceRate: 0.002 },
             { position: 3, name: "Lessee3- GHI", tdsRate: 0.1, propertyTaxRate: 0.02, insuranceRate: 0.002 },
