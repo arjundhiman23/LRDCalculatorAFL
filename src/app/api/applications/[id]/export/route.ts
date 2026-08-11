@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import type { ScheduleRow, TenureResult } from "@/lib/engine/types";
+import { computeManualRtr } from "@/lib/manualRtr";
 import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
@@ -253,6 +254,61 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
       addScheduleSheet(wb, `UT ${l.lesseeName}`.slice(0, 31), l.schedule);
     }
     addScheduleSheet(wb, "UT consolidated", result.uniqueTenure.consolidatedSchedule);
+  }
+
+  // ---- Manual RTR sheet (when configured with a balance) ----
+  const rtr = await computeManualRtr(id);
+  if (rtr && rtr.configured && rtr.schedule.length > 0) {
+    const ws2 = wb.addWorksheet("Manual RTR");
+    ws2.getColumn(1).width = 30;
+    ws2.getColumn(2).width = 18;
+    const addCfg = (label: string, value: ExcelJS.CellValue, fmt?: string) => {
+      const row = ws2.addRow([label, value]);
+      row.getCell(1).font = { bold: true };
+      if (fmt) row.getCell(2).numFmt = fmt;
+    };
+    addCfg("Opening balance", rtr.config.openingBalance, MONEY);
+    addCfg("ROI", rtr.config.roi, PCT);
+    addCfg("Cash cover", rtr.config.cashCover);
+    addCfg("Start date", rtr.config.startDate);
+    addCfg("Months", rtr.config.months);
+    const payoff = rtr.schedule.find(
+      (r) => r.monthIndex > 0 && r.closingBalance <= 0,
+    );
+    addCfg(
+      "Fully repaid",
+      payoff ? `Month ${payoff.monthIndex} (${payoff.dueDate})` : "Not within horizon",
+    );
+    ws2.addRow([]);
+    const head = ws2.addRow([
+      "Sr no",
+      "Due date",
+      "Days",
+      "Net rent",
+      "Serviceable cash",
+      "Opening balance",
+      "Interest",
+      "Principal",
+      "Instalment",
+      "Closing balance",
+    ]);
+    head.font = { bold: true };
+    for (let c = 3; c <= 10; c++) ws2.getColumn(c).width = 16;
+    for (const r of rtr.schedule) {
+      const row = ws2.addRow([
+        r.monthIndex,
+        r.dueDate,
+        r.days,
+        r.netRent,
+        r.cash,
+        r.openingBalance,
+        r.interest,
+        r.principal,
+        r.instalment,
+        r.closingBalance,
+      ]);
+      for (let c = 4; c <= 10; c++) row.getCell(c).numFmt = MONEY;
+    }
   }
 
   const buffer = await wb.xlsx.writeBuffer();

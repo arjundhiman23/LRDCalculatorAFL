@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { calculate } from "@/lib/engine/engine";
 import { formatDate, formatINR, formatPct } from "@/lib/format";
+import { computeManualRtr } from "@/lib/manualRtr";
 import { leaseDetailsRows, recoGrid, rentalBreakup } from "@/lib/reportData";
 import { applicationToPayload, lesseeToEngineInput } from "@/lib/serialize";
 
@@ -51,9 +52,15 @@ export default async function ReportPage({
   const breakup = rentalBreakup(payload, activeLessees);
   const hasCredits = app.reconciliations.length > 0;
   const grid = hasCredits ? recoGrid(payload, app.lessees, app.reconciliations, 12) : null;
+  const rtr = await computeManualRtr(id);
+  const showRtr = !!rtr && rtr.configured && rtr.schedule.length > 0;
+  const rtrPayoff = showRtr
+    ? rtr.schedule.find((r) => r.monthIndex > 0 && r.closingBalance <= 0)
+    : undefined;
   const numEligibility = 5;
   const numUnique = result.uniqueTenure ? 6 : null;
   const numSchedule = result.uniqueTenure ? 7 : 6;
+  const numRtr = numSchedule + 1;
   const cellCls =
     "[&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5";
   const headCls =
@@ -350,6 +357,50 @@ export default async function ReportPage({
                   <td className="text-right">{formatINR(r.closingBalance)}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {showRtr && rtr && (
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-semibold">
+            {numRtr}. Manual RTR — run-off of existing balance
+          </h2>
+          <p className="mb-2 text-xs text-slate-500">
+            Opening balance {formatINR(rtr.config.openingBalance)} · ROI{" "}
+            {formatPct(rtr.config.roi)} · cash cover {rtr.config.cashCover} · from{" "}
+            {formatDate(rtr.config.startDate)} ·{" "}
+            {rtrPayoff
+              ? `fully repaid at month ${rtrPayoff.monthIndex} (${formatDate(rtrPayoff.dueDate)})`
+              : `not fully repaid within ${rtr.config.months} months`}
+          </p>
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className={headCls}>
+                <th>#</th>
+                <th>Due date</th>
+                <th className="!text-right">Serviceable cash</th>
+                <th className="!text-right">Interest</th>
+                <th className="!text-right">Principal</th>
+                <th className="!text-right">Closing balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rtr.schedule
+                .filter(
+                  (r) => !rtrPayoff || r.monthIndex <= rtrPayoff.monthIndex,
+                )
+                .map((r) => (
+                  <tr key={r.monthIndex} className="[&_td]:border [&_td]:border-slate-200 [&_td]:px-2 [&_td]:py-0.5">
+                    <td>{r.monthIndex}</td>
+                    <td>{formatDate(r.dueDate)}</td>
+                    <td className="text-right">{formatINR(r.cash)}</td>
+                    <td className="text-right">{formatINR(r.interest)}</td>
+                    <td className="text-right">{formatINR(r.principal)}</td>
+                    <td className="text-right">{formatINR(r.closingBalance)}</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </section>
