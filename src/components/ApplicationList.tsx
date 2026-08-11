@@ -18,6 +18,15 @@ interface Row {
 export function ApplicationList({ applications }: { applications: Row[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function remove(id: string, name: string) {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    setDeleting(id);
+    await fetch(`/api/applications/${id}`, { method: "DELETE" });
+    setDeleting(null);
+    router.refresh();
+  }
 
   async function createNew() {
     setBusy(true);
@@ -51,12 +60,13 @@ export function ApplicationList({ applications }: { applications: Row[] }) {
               <th className="px-4 py-2 font-medium">Gross rent / month</th>
               <th className="px-4 py-2 font-medium">Updated</th>
               <th className="px-4 py-2 font-medium">By</th>
+              <th className="px-4 py-2" />
             </tr>
           </thead>
           <tbody>
             {applications.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   No applications yet. Create one to get started.
                 </td>
               </tr>
@@ -73,6 +83,18 @@ export function ApplicationList({ applications }: { applications: Row[] }) {
                 <td className="px-4 py-3 text-slate-700">{formatCrore(a.totalGrossRent)}</td>
                 <td className="px-4 py-3 text-slate-500">{formatDate(a.updatedAt.slice(0, 10))}</td>
                 <td className="px-4 py-3 text-slate-500">{a.createdBy}</td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    className="rounded px-2 py-1 text-xs text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    disabled={deleting === a.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      remove(a.id, a.name);
+                    }}
+                  >
+                    {deleting === a.id ? "Deleting…" : "Delete"}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

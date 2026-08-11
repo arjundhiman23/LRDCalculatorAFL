@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { netRentAt } from "@/lib/engine/engine";
+import { netRentAt, rentSteps } from "@/lib/engine/engine";
 import { firstDueDate } from "@/lib/engine/dates";
 import { formatCrore, formatINR } from "@/lib/format";
 import { lesseeToEngineInput } from "@/lib/serialize";
@@ -387,7 +387,39 @@ function LesseeEditor({
             </tbody>
           </table>
         )}
+        <EscalationPreview lessee={lessee} />
       </div>
+    </div>
+  );
+}
+
+/** Shows the resolved escalation timeline: effective dates and the gross rent
+ * from each date onward (events with 0 months collapse onto the same date and
+ * compound, exactly like the workbook). */
+function EscalationPreview({ lessee }: { lessee: LesseePayload }) {
+  if (!lessee.firstEscalationDate || lessee.escalations.length === 0 || lessee.grossRent <= 0) {
+    return null;
+  }
+  const steps = rentSteps(lesseeToEngineInput(lessee));
+  // Collapse repeated dates: only the last (fully compounded) rent applies.
+  const effective = steps.filter(
+    (s, i) => i === steps.length - 1 || steps[i + 1].date !== s.date,
+  );
+  return (
+    <div className="mt-3 rounded-lg bg-slate-50 px-4 py-3 text-xs text-slate-600">
+      <span className="font-medium text-slate-500">Resulting rent timeline: </span>
+      {formatINR(lessee.grossRent)} now
+      {effective.map((s) => (
+        <span key={s.date}>
+          {" "}
+          → {formatINR(s.gross)} from {s.date}
+        </span>
+      ))}
+      {effective.length < steps.length && (
+        <span className="ml-1 text-slate-400">
+          (escalations sharing a date compound together, as in the Excel)
+        </span>
+      )}
     </div>
   );
 }
