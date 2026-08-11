@@ -1,0 +1,26 @@
+# Render Blueprint: deploys the web service + Postgres together.
+# In Render: New + -> Blueprint -> pick this repo -> Apply.
+databases:
+  - name: lrd-postgres
+    databaseName: lrd_calculator
+    user: lrd
+    plan: free
+
+services:
+  - type: web
+    name: lrd-calculator
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Migrations run on every boot before the server starts (idempotent).
+    startCommand: npx prisma migrate deploy && npm run start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lrd-postgres
+          property: connectionString
+      - key: AUTH_SECRET
+        generateValue: true
