@@ -407,7 +407,6 @@ export default async function ReportPage({
                 <th className="!text-right">Additional disbursement</th>
                 <th className="!text-right">Repayment</th>
                 <th className="!text-right">Revised ROI</th>
-                <th className="!text-right">Revised EMI</th>
                 <th>Note</th>
               </tr>
             </thead>
@@ -425,9 +424,6 @@ export default async function ReportPage({
                   </td>
                   <td className="text-right">
                     {e.revisedRoi == null ? "—" : formatPct(e.revisedRoi)}
-                  </td>
-                  <td className="text-right">
-                    {e.revisedEmi == null ? "—" : formatINR(e.revisedEmi)}
                   </td>
                   <td>{e.note || "—"}</td>
                 </tr>
