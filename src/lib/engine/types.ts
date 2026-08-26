@@ -4,9 +4,9 @@
 export interface EscalationEvent {
   /** Escalation applied to gross rent at this event, e.g. 0.15 = +15%. */
   rate: number;
-  /** Months after the previous escalation event (ignored for the first event,
-   * whose date is `firstEscalationDate`). 0 collapses onto the previous date,
-   * matching the Excel's EDATE(date, 0) behaviour. */
+  /** Months after the previous escalation event. For the first event this is
+   * an offset from `firstEscalationDate` (0 = use the date exactly, matching
+   * the Excel's EDATE(date, 0) behaviour). */
   monthsAfterPrevious: number;
   /** Optional cash cover from this escalation date onward. When omitted the
    * previous factor continues (workbook's "Disc factor from" thresholds). */
@@ -121,3 +121,4 @@ export interface CalculationResult {
   totalCashMonthly: number;
   warnings: string[];
 }
+
