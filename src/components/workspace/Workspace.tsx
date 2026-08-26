@@ -179,9 +179,12 @@ export function Workspace({
           calculating={calculating}
         />
       )}
-      {tab === "postDisbursement" && <PostDisbursementTab app={app} update={update} />}
+      {tab === "postDisbursement" && (
+        <PostDisbursementTab app={app} update={update} standardTenures={standardTenures} />
+      )}
       {tab === "reco" && <RecoTab applicationId={applicationId} app={app} />}
       {tab === "rtr" && <RtrTab app={app} update={update} />}
     </div>
   );
 }
+
