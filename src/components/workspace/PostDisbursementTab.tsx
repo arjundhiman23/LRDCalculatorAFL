@@ -255,7 +255,7 @@ export function PostDisbursementTab({
             </div>
           ))}
 
-          <SummaryCards result={result} events={events} />
+          <SummaryCards result={result} events={events} sanctionedTenure={app.proposedTenure} />
 
           <Card
             title={
@@ -450,11 +450,23 @@ function EventRow({
 function SummaryCards({
   result,
   events,
+  sanctionedTenure,
 }: {
   result: PostDisbursementResult;
   events: PostDisbursementEventPayload[];
+  sanctionedTenure: number | null;
 }) {
-  const delta = result.tenureChangeMonths;
+  // Once a sanctioned tenure is set, that's the meaningful reference point —
+  // the loan is meant to hold to it, so "change" should mean "did it hold,"
+  // not "how does this compare to the unadjusted natural schedule" (which is
+  // what tenureChangeMonths/baselineClosure measure and remain useful for
+  // only when no sanctioned tenure exists).
+  const deltaVsSanctioned =
+    sanctionedTenure && result.revisedTenureMonths !== null
+      ? result.revisedTenureMonths - sanctionedTenure
+      : null;
+  const usingSanctioned = sanctionedTenure !== null;
+  const delta = usingSanctioned ? deltaVsSanctioned : result.tenureChangeMonths;
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <Card>
@@ -477,19 +489,30 @@ function SummaryCards({
       </Card>
       <Card>
         <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
-          Change in tenure
+          {usingSanctioned ? "Vs. sanctioned tenure" : "Change in tenure"}
         </div>
         <div
           className={`mt-1 text-2xl font-semibold ${
-            delta === null ? "text-slate-400" : delta > 0 ? "text-amber-600" : "text-emerald-600"
+            delta === null ? "text-slate-400" : delta !== 0 ? "text-amber-600" : "text-emerald-600"
           }`}
         >
-          {delta === null ? "—" : delta === 0 ? "No change" : `${delta > 0 ? "+" : ""}${delta} months`}
+          {delta === null
+            ? "—"
+            : delta === 0
+              ? usingSanctioned
+                ? "Holds the sanctioned tenure"
+                : "No change"
+              : `${delta > 0 ? "+" : ""}${delta} months`}
         </div>
         <p className="mt-1 text-xs text-slate-400">
-          {result.baselineClosure
-            ? `Originally ${formatDate(result.baselineClosure.dueDate)} (${result.baselineTenureMonths} months)`
-            : "No original closure to compare"}
+          {usingSanctioned
+            ? `Sanctioned for ${sanctionedTenure} months` +
+              (delta !== 0
+                ? " — only a revised ROI or a repayment should move this"
+                : "")
+            : result.baselineClosure
+              ? `Originally ${formatDate(result.baselineClosure.dueDate)} (${result.baselineTenureMonths} months)`
+              : "No original closure to compare"}
         </p>
       </Card>
       <Card>
@@ -638,5 +661,6 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
     </div>
   );
 }
+
 
 
