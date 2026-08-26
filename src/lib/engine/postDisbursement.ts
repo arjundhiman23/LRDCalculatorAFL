@@ -5,18 +5,24 @@
  * actual outstanding balance is restated. Each change carries an effective
  * date.
  *
- * Two different levers absorb a change, depending on its kind:
+ * Whenever a **sanctioned tenure** is set (`originalTenureMonths`), the loan is
+ * held to it by solving a discounting factor (cash cover) on the combined
+ * rental cash flow — the same lever `solveDiscountFactor` uses at the
+ * eligibility stage, just applied mid-loan. This starts from the **initial
+ * disbursement itself**, so the loan is on track for the sanctioned tenure
+ * from day one, not only once a later change forces a correction. Two kinds
+ * of change are exempt and are allowed to move the closure date instead:
  *
- * - A **revised ROI** or a **repayment** is allowed to move the closure date —
- *   the tenure absorbs it, exactly as the workbook expects a rate reset or a
- *   prepayment to shorten or lengthen the loan.
- * - Anything else that changes the outstanding balance (an additional
- *   disbursement, or restating the actual outstanding balance) is **not**
- *   allowed to move the tenure. Instead the discounting factor (cash cover) on
- *   the combined rental cash flow is solved automatically from that date
- *   onward so the loan still closes at the **sanctioned tenure**
- *   (`originalTenureMonths`) — the same lever `solveDiscountFactor` uses at
- *   the eligibility stage, just applied mid-loan.
+ * - A **revised ROI** — the tenure absorbs a rate reset, as the workbook
+ *   expects.
+ * - A **repayment** — a prepayment shortens the tenure rather than being
+ *   offset by a lower cover.
+ *
+ * Everything else that changes the outstanding balance (an additional
+ * disbursement, or restating the actual outstanding balance) re-solves the
+ * cover from its effective date so the loan still closes at the sanctioned
+ * tenure. Without a sanctioned tenure, every change instead moves the
+ * closure date, and an event-free run is byte-identical to `simulate`.
  *
  * If even a 100% cash cover cannot repay the loan by the sanctioned tenure,
  * the cover is capped at 1 and the loan is left to run to its natural
@@ -27,9 +33,8 @@
  *
  * The mechanics below the cover computation are unchanged from before: an
  * event may land on any day of the month, splitting the interest period at
- * the effective date; rounding stays at the due date, so an event-free run is
- * byte-identical to `simulate`; and the schedule runs to closure rather than a
- * fixed tenure.
+ * the effective date; rounding stays at the due date; and the schedule runs
+ * to closure rather than a fixed tenure.
  */
 import { compareISO, diffDays, edate, firstDueDate } from "./dates";
 import { cashAt, netRentAt, simulate } from "./engine";
@@ -250,26 +255,28 @@ function solveDiscountFactorOverrides(
     sanctionedTenureMonths,
   );
 
-  for (const event of sortedEvents) {
-    if (isTenureMover(event) || !changesBalance(event)) continue;
-
-    if (compareISO(event.effectiveDate, targetDueDate) > 0) {
-      warnings.push(
-        `The change on ${event.effectiveDate} falls after the sanctioned tenure ` +
-          `ends (${targetDueDate}); it could not be absorbed by an automatic ` +
-          `discounting-factor adjustment.`,
-      );
-      continue;
-    }
-
+  /** Solves the multiplier that should be in force from `fromDate` onward
+   * (on top of whatever overrides are already fixed) so the loan still
+   * closes at the sanctioned tenure, and records it. `label` only affects
+   * the wording of the info/warning message. */
+  const solveFrom = (fromDate: string, label: string): void => {
+    // A segment's own solve must only be answerable from what's known as of
+    // its own date — events that haven't happened yet must not silently
+    // pre-inflate this segment's cover in anticipation of a future change,
+    // since that later change gets its own segment (or moves the tenure)
+    // when it actually occurs. Only events up to and including this date are
+    // mechanically applied in the trial used to solve it.
+    const knownEvents = sortedEvents.filter(
+      (e) => compareISO(e.effectiveDate, fromDate) <= 0,
+    );
     const endingAt = (multiplier: number): number => {
-      const trial = [...overrides, { fromDate: event.effectiveDate, multiplier }];
+      const trial = [...overrides, { fromDate, multiplier }];
       const rows = runSchedule(
         loan,
         sanctionedTenureMonths,
         lessees,
         params,
-        sortedEvents,
+        knownEvents,
         trial,
       );
       return rows[rows.length - 1].closingBalance;
@@ -281,8 +288,8 @@ function solveDiscountFactorOverrides(
       resolved = 1;
       warnings.push(
         `Even a 100% cash cover cannot repay the loan by the sanctioned tenure ` +
-          `after the change on ${event.effectiveDate}; the discounting factor has ` +
-          `been capped at 1.00 and the loan will run longer than sanctioned.`,
+          `${label}; the discounting factor has been capped at 1.00 and the loan ` +
+          `will run longer than sanctioned.`,
       );
     } else if (endingAt(0) <= 0) {
       resolved = 0;
@@ -297,11 +304,30 @@ function solveDiscountFactorOverrides(
       resolved = hi;
       warnings.push(
         `Discounting factor automatically adjusted to ${(resolved * 100).toFixed(1)}% ` +
-          `from ${event.effectiveDate} to hold the sanctioned tenure of ` +
-          `${sanctionedTenureMonths} months.`,
+          `${label} to hold the sanctioned tenure of ${sanctionedTenureMonths} months.`,
       );
     }
-    overrides.push({ fromDate: event.effectiveDate, multiplier: resolved });
+    overrides.push({ fromDate, multiplier: resolved });
+  };
+
+  // The initial disbursement is solved first, so the loan is on track for the
+  // sanctioned tenure from day one rather than only once a later change forces
+  // a correction.
+  solveFrom(params.disbursementDate, "at disbursement");
+
+  for (const event of sortedEvents) {
+    if (isTenureMover(event) || !changesBalance(event)) continue;
+
+    if (compareISO(event.effectiveDate, targetDueDate) > 0) {
+      warnings.push(
+        `The change on ${event.effectiveDate} falls after the sanctioned tenure ` +
+          `ends (${targetDueDate}); it could not be absorbed by an automatic ` +
+          `discounting-factor adjustment.`,
+      );
+      continue;
+    }
+
+    solveFrom(event.effectiveDate, `from ${event.effectiveDate}`);
   }
 
   return { overrides, warnings };
