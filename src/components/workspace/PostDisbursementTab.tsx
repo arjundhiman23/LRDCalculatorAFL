@@ -26,9 +26,11 @@ import { ScheduleTable } from "./ResultsTab";
 
 /** The loan after it has been disbursed: dated changes (additional
  * disbursement, prepayment, rate reset, restated balance) are applied to the
- * running schedule. A revised ROI or a repayment moves the closure date;
- * anything else instead holds the sanctioned tenure by auto-adjusting the
- * discounting factor on the combined rental cash flow from that date. */
+ * running schedule. When a sanctioned tenure is set, the discounting factor
+ * on the combined rental cash flow is auto-solved to hold it — starting from
+ * the initial disbursement itself, not only once a later change happens. A
+ * revised ROI or a repayment is the exception: it moves the closure date
+ * instead of being absorbed by the cover. */
 export function PostDisbursementTab({
   app,
   update,
@@ -161,7 +163,7 @@ export function PostDisbursementTab({
           </Field>
           <Field
             label="Sanctioned tenure"
-            hint="Additional disbursements and balance restatements hold to this by auto-adjusting the cash cover"
+            hint="The cash cover is auto-solved to hold to this, from the disbursement itself onward"
           >
             <NumberInput
               value={app.proposedTenure}
@@ -174,9 +176,10 @@ export function PostDisbursementTab({
         </div>
         {!app.proposedTenure && (
           <p className="mt-3 text-xs text-amber-700">
-            Set a sanctioned tenure to hold the loan to it automatically. Without one,
-            additional disbursements and balance restatements move the closure date
-            instead.
+            Set a sanctioned tenure to hold the loan to it automatically, starting from
+            the disbursement itself. Without one, every change — including the initial
+            disbursement&apos;s own cash flow — just runs on the lessees&apos; configured
+            cash cover, and moves the closure date.
           </p>
         )}
         {loanAmount <= 0 && (
@@ -581,3 +584,4 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
     </div>
   );
 }
+
