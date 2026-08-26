@@ -35,7 +35,7 @@ export function rentSteps(lessee: LesseeInput): RentStep[] {
   let gross = lessee.grossRent;
   let df = lessee.discountFactor;
   lessee.escalations.forEach((esc, i) => {
-    if (i > 0) date = edate(date, esc.monthsAfterPrevious);
+    date = edate(date, esc.monthsAfterPrevious);
     gross *= 1 + esc.rate;
     if (esc.discountFactor !== null && esc.discountFactor !== undefined) {
       df = esc.discountFactor;
@@ -422,3 +422,4 @@ export function calculate(input: CalculationInput): CalculationResult {
     warnings,
   };
 }
+
