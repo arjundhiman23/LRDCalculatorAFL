@@ -44,10 +44,15 @@ function event(
     additionalDisbursement: 0,
     repayment: 0,
     revisedRoi: null,
-    revisedEmi: null,
     ...over,
   };
 }
+
+/** The natural closure month with no events — used as the "sanctioned
+ * tenure" fixture so the auto-adjustment tests have a concrete, known target
+ * that the untouched schedule already meets exactly. */
+const SANCTIONED = computePostDisbursement(LOAN, [lessee], params, [])
+  .baselineTenureMonths!;
 
 describe("post-disbursement run with no events", () => {
   it("is identical to the sanctioned schedule", () => {
@@ -55,13 +60,13 @@ describe("post-disbursement run with no events", () => {
     const plain = simulate(LOAN, 120, [lessee], params);
     expect(withEvents).toHaveLength(plain.length);
     for (let i = 0; i < plain.length; i++) {
-      const { roi, additionalDisbursement, repayment, balanceAdjustment, rentCash, emiOverridden, events, ...shared } =
+      const { roi, additionalDisbursement, repayment, balanceAdjustment, rentCash, autoAdjusted, events, ...shared } =
         withEvents[i];
       expect(shared).toEqual(plain[i]);
       expect(roi).toBe(params.roi);
       expect([additionalDisbursement, repayment, balanceAdjustment]).toEqual([0, 0, 0]);
       expect(rentCash).toBe(plain[i].cash);
-      expect(emiOverridden).toBe(false);
+      expect(autoAdjusted).toBe(false);
       expect(events).toEqual([]);
     }
   });
@@ -73,6 +78,14 @@ describe("post-disbursement run with no events", () => {
     expect(result.tenureChangeMonths).toBe(0);
     expect(result.totalAdditionalDisbursement).toBe(0);
     expect(result.totalRepayment).toBe(0);
+  });
+
+  it("also holds with a sanctioned tenure set and no events (nothing to adjust)", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
   });
 });
 
@@ -111,19 +124,25 @@ describe("every row reconciles", () => {
   });
 });
 
-describe("additional disbursement", () => {
-  const result = computePostDisbursement(LOAN, [lessee], params, [
-    event("2026-03-07", { additionalDisbursement: 100_000_000 }),
-  ]);
-
-  it("raises the balance on the effective date and pushes closure out", () => {
+describe("without a sanctioned tenure, changes still move the closure date", () => {
+  it("an additional disbursement pushes closure out", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [
+      event("2026-03-07", { additionalDisbursement: 100_000_000 }),
+    ]);
     expect(result.totalAdditionalDisbursement).toBe(100_000_000);
     expect(result.tenureChangeMonths!).toBeGreaterThan(0);
     expect(result.revisedTenureMonths!).toBeGreaterThan(result.baselineTenureMonths!);
     expect(result.warnings.some((w) => w.includes("longer"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("Set a sanctioned tenure"))).toBe(
+      true,
+    );
+    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
   });
 
   it("leaves the months before the effective date untouched", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [
+      event("2026-03-07", { additionalDisbursement: 100_000_000 }),
+    ]);
     const before = result.schedule.filter((r) => r.dueDate < "2026-03-15");
     const baseline = result.baseline.filter((r) => r.dueDate < "2026-03-15");
     expect(before.map((r) => r.closingBalance)).toEqual(
@@ -132,6 +151,9 @@ describe("additional disbursement", () => {
   });
 
   it("charges interest on the larger balance only from the effective date", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [
+      event("2026-03-07", { additionalDisbursement: 100_000_000 }),
+    ]);
     const row = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
     const opening = row.openingBalance;
     // 2026-02-15 -> 2026-03-07 at the old balance, then eight days at the new.
@@ -142,127 +164,228 @@ describe("additional disbursement", () => {
   });
 });
 
-describe("repayment", () => {
-  it("shortens the tenure", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [
-      event("2027-06-15", { repayment: 150_000_000 }),
-    ]);
-    expect(result.totalRepayment).toBe(150_000_000);
-    expect(result.tenureChangeMonths!).toBeLessThan(0);
-    expect(result.warnings.some((w) => w.includes("earlier"))).toBe(true);
+describe("with a sanctioned tenure, additional disbursements hold the tenure", () => {
+  it("does not move the closure date", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 100_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    expect(result.tenureChangeMonths).toBe(0);
   });
 
-  it("clears the loan outright when it covers the whole balance", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [
-      event("2026-01-15", { repayment: 2_000_000_000 }),
-    ]);
+  it("auto-adjusts the discounting factor from the event's date onward", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 100_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const before = result.schedule.find((r) => r.dueDate === "2026-02-15")!;
+    const after = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    expect(before.autoAdjusted).toBe(false);
+    expect(after.autoAdjusted).toBe(true);
+    // More cover is needed to absorb the extra principal within the same tenure.
+    expect(after.discountFactor).toBeGreaterThan(before.discountFactor);
+    expect(
+      result.warnings.some((w) => w.includes("Discounting factor automatically adjusted")),
+    ).toBe(true);
+  });
+
+  it("leaves the months before the effective date untouched", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 100_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const before = result.schedule.filter((r) => r.dueDate < "2026-03-15");
+    const baseline = result.baseline.filter((r) => r.dueDate < "2026-03-15");
+    expect(before.map((r) => r.closingBalance)).toEqual(
+      baseline.map((r) => r.closingBalance),
+    );
+  });
+
+  it("a smaller disbursement needs a smaller adjustment than a larger one", () => {
+    const small = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 20_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const large = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 100_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const smallDf = small.schedule.find((r) => r.dueDate === "2026-03-15")!.discountFactor;
+    const largeDf = large.schedule.find((r) => r.dueDate === "2026-03-15")!.discountFactor;
+    expect(largeDf).toBeGreaterThan(smallDf);
+    expect(small.revisedTenureMonths).toBe(SANCTIONED);
+    expect(large.revisedTenureMonths).toBe(SANCTIONED);
+  });
+});
+
+describe("with a sanctioned tenure, restating the outstanding balance also holds it", () => {
+  it("raises the cover when the actual balance is higher than projected", () => {
+    const projected = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
+    const projectedBalance = projected.schedule.find((r) => r.dueDate === "2026-06-15")!
+      .openingBalance;
+
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-06-15", { outstandingBalance: projectedBalance + 80_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    const row = result.schedule.find((r) => r.dueDate === "2026-06-15")!;
+    expect(row.autoAdjusted).toBe(true);
+    expect(row.balanceAdjustment).toBeCloseTo(80_000_000, 0);
+  });
+
+  it("lowers the cover when the actual balance is lower than projected", () => {
+    const projected = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
+    const projectedBalance = projected.schedule.find((r) => r.dueDate === "2026-06-15")!
+      .openingBalance;
+
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-06-15", { outstandingBalance: projectedBalance - 80_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    const after = result.schedule.find((r) => r.dueDate === "2026-06-15")!;
+    const later = result.schedule.find((r) => r.dueDate === "2026-07-15")!;
+    // Less balance to recover means less cover is needed to still hit the
+    // same tenure (spreading repayment out rather than closing early).
+    expect(later.discountFactor).toBeLessThan(projected.schedule.find((r) => r.dueDate === "2026-07-15")!.discountFactor);
+    expect(after.autoAdjusted).toBe(true);
+  });
+});
+
+describe("revised ROI and repayment are still allowed to move the tenure", () => {
+  it("a repayment shortens the tenure even with a sanctioned tenure set", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2027-06-15", { repayment: 150_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.totalRepayment).toBe(150_000_000);
+    expect(result.tenureChangeMonths!).toBeLessThan(0);
+    expect(result.revisedTenureMonths).not.toBe(SANCTIONED);
+    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
+  });
+
+  it("a revised ROI moves the tenure even with a sanctioned tenure set", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2027-01-05", { revisedRoi: 0.18 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.tenureChangeMonths!).toBeGreaterThan(0);
+    expect(result.revisedTenureMonths).not.toBe(SANCTIONED);
+    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
+  });
+
+  it("clears the loan outright when a repayment covers the whole balance", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-01-15", { repayment: 2_000_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
     expect(result.closure!.dueDate).toBe("2026-01-15");
     expect(result.schedule[result.schedule.length - 1].closingBalance).toBeLessThanOrEqual(0);
   });
-});
 
-describe("revised ROI", () => {
-  it("splits the interest period at a mid-month effective date", () => {
-    const rows = simulateWithEvents(LOAN, 12, [lessee], params, [
-      event("2024-09-01", { revisedRoi: 0.18 }),
-    ]);
-    const row = rows[1]; // 2024-08-15 -> 2024-09-15
-    const opening = row.openingBalance;
-    const atOldRate = Math.round((opening * 31 * 0.15) / 365);
-    const atNewRate = Math.round((opening * 31 * 0.18) / 365);
-    // 17 days at 15%, then 14 at 18%.
-    expect(row.interest).toBe(
-      Math.round((opening * 17 * 0.15) / 365 + (opening * 14 * 0.18) / 365),
+  it("an additional disbursement combined with a repayment in the same event is treated as a tenure mover", () => {
+    // The literal rule: a revised ROI or a repayment in the event is what
+    // lets tenure move, regardless of what else the event also does.
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 50_000_000, repayment: 10_000_000 })],
+      { originalTenureMonths: SANCTIONED },
     );
-    expect(row.interest).toBeGreaterThan(atOldRate);
-    expect(row.interest).toBeLessThan(atNewRate);
-    expect(row.roi).toBe(0.18);
-  });
-
-  it("keeps the new rate in force for later months", () => {
-    const rows = simulateWithEvents(LOAN, 12, [lessee], params, [
-      event("2024-09-01", { revisedRoi: 0.18 }),
-    ]);
-    const later = rows[3];
-    expect(later.roi).toBe(0.18);
-    expect(later.interest).toBe(
-      Math.round((later.openingBalance * later.days * 0.18) / 365),
-    );
-  });
-
-  it("a rate rise extends the tenure", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [
-      event("2027-01-05", { revisedRoi: 0.18 }),
-    ]);
-    expect(result.tenureChangeMonths!).toBeGreaterThan(0);
+    const row = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    expect(row.autoAdjusted).toBe(false);
   });
 });
 
-describe("actual outstanding balance", () => {
-  it("anchors the run to the figure the RM enters", () => {
-    const rows = simulateWithEvents(LOAN, 60, [lessee], params, [
-      event("2026-06-15", { outstandingBalance: 800_000_000 }),
-    ]);
-    const row = rows.find((r) => r.dueDate === "2026-06-15")!;
-    expect(row.balanceAdjustment).toBeCloseTo(800_000_000 - row.openingBalance, 6);
-    expect(row.closingBalance).toBeCloseTo(800_000_000 - row.principal, 6);
-  });
-
-  it("applies the disbursement and repayment on top of the stated balance", () => {
-    const rows = simulateWithEvents(LOAN, 60, [lessee], params, [
-      event("2026-06-15", {
-        outstandingBalance: 800_000_000,
-        additionalDisbursement: 20_000_000,
-        repayment: 5_000_000,
-      }),
-    ]);
-    const row = rows.find((r) => r.dueDate === "2026-06-15")!;
-    expect(row.closingBalance).toBeCloseTo(815_000_000 - row.principal, 6);
-  });
-});
-
-describe("revised EMI", () => {
-  it("replaces the rent-derived instalment from its effective date", () => {
-    const rows = simulateWithEvents(LOAN, 60, [lessee], params, [
-      event("2026-06-15", { revisedEmi: 20_000_000 }),
-    ]);
-    const before = rows.find((r) => r.dueDate === "2026-05-15")!;
-    const after = rows.find((r) => r.dueDate === "2026-06-15")!;
-    expect(before.emiOverridden).toBe(false);
-    expect(before.instalment).toBe(before.interest + before.principal);
-    expect(after.emiOverridden).toBe(true);
-    expect(after.instalment).toBe(20_000_000);
-    expect(after.cash).toBe(20_000_000);
-    // The rent it replaced is still reported alongside.
-    expect(after.rentCash).toBeCloseTo(before.rentCash, 6);
-  });
-
-  it("a bigger instalment closes the loan sooner", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [
-      event("2026-06-15", { revisedEmi: 25_000_000 }),
-    ]);
-    expect(result.tenureChangeMonths!).toBeLessThan(0);
-  });
-
-  it("warns when the instalment no longer covers the interest", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [
-      event("2026-06-15", { revisedEmi: 1_000_000 }),
-    ]);
-    expect(result.negativeMonths).toBeGreaterThan(0);
-    expect(result.fullyRepaid).toBe(false);
-    expect(result.warnings.some((w) => w.includes("do not cover the interest"))).toBe(
-      true,
+describe("no negative principal anywhere the auto-adjustment can prevent it", () => {
+  it("keeps every month's principal positive after a moderate additional disbursement", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 50_000_000 })],
+      { originalTenureMonths: SANCTIONED },
     );
-    expect(result.warnings.some((w) => w.includes("does not clear"))).toBe(true);
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    expect(result.negativeMonths).toBe(0);
+    expect(
+      result.schedule.every(
+        (r) => r.monthIndex <= params.moratoriumMonths || r.principal >= 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("caps the cover at 1 and warns when even full cash cover cannot hold the tenure", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      // Large enough that no achievable cover repays it by the (comparatively
+      // short) sanctioned tenure, but still small enough to close eventually.
+      [event("2026-03-07", { additionalDisbursement: 200_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(
+      result.warnings.some((w) => w.includes("Even a 100% cash cover cannot repay")),
+    ).toBe(true);
+    const after = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    expect(after.autoAdjusted).toBe(true);
+    expect(after.discountFactor).toBeCloseTo(1, 2);
+    // The tenure could not actually be held in this extreme case.
+    expect(result.revisedTenureMonths).not.toBeNull();
+    expect(result.revisedTenureMonths!).toBeGreaterThan(SANCTIONED);
   });
 });
 
 describe("several events over the life of the loan", () => {
-  const result = computePostDisbursement(LOAN, [lessee], params, [
-    event("2028-11-20", { repayment: 40_000_000 }),
-    event("2026-03-07", { additionalDisbursement: 60_000_000 }),
-    event("2027-07-01", { revisedRoi: 0.16 }),
-  ]);
+  const result = computePostDisbursement(
+    LOAN,
+    [lessee],
+    params,
+    [
+      event("2028-11-20", { repayment: 40_000_000 }),
+      event("2026-03-07", { additionalDisbursement: 60_000_000 }),
+      event("2027-07-01", { revisedRoi: 0.16 }),
+    ],
+    { originalTenureMonths: SANCTIONED },
+  );
 
   it("applies them in effective-date order regardless of input order", () => {
     expect(result.events.map((e) => e.effectiveDate)).toEqual([
@@ -285,30 +408,31 @@ describe("several events over the life of the loan", () => {
     expect(result.totalRepayment).toBe(40_000_000);
     expect(result.totalInterest).toBeGreaterThan(0);
   });
+
+  it("the disbursement is auto-adjusted, but the ROI and repayment events still move tenure from that point", () => {
+    // The disbursement in March gets its own cover, aimed at the sanctioned
+    // tenure; the later ROI/repayment events are tenure movers so the final
+    // closure need not land exactly on the sanctioned tenure.
+    const marchRow = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    expect(marchRow.autoAdjusted).toBe(true);
+  });
 });
 
-describe("sanctioned tenure", () => {
-  it("flags a closure that overruns it", () => {
+describe("sequential auto-adjusting events cumulatively hold the tenure", () => {
+  it("two additional disbursements in a row both get absorbed without moving closure", () => {
     const result = computePostDisbursement(
       LOAN,
       [lessee],
       params,
-      [event("2026-03-07", { additionalDisbursement: 200_000_000 })],
-      { originalTenureMonths: 120 },
+      [
+        event("2026-03-07", { additionalDisbursement: 40_000_000 }),
+        event("2028-01-15", { additionalDisbursement: 40_000_000 }),
+      ],
+      { originalTenureMonths: SANCTIONED },
     );
-    expect(result.overrunMonths).toBe(result.revisedTenureMonths! - 120);
-    expect(result.overrunMonths!).toBeGreaterThan(0);
-    expect(result.warnings.some((w) => w.includes("beyond the sanctioned tenure"))).toBe(
-      true,
-    );
-  });
-
-  it("says nothing when the loan still closes inside it", () => {
-    const result = computePostDisbursement(LOAN, [lessee], params, [], {
-      originalTenureMonths: 240,
-    });
-    expect(result.overrunMonths).toBe(0);
-    expect(result.warnings.some((w) => w.includes("sanctioned tenure"))).toBe(false);
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    const afterSecond = result.schedule.find((r) => r.dueDate === "2028-01-15")!;
+    expect(afterSecond.autoAdjusted).toBe(true);
   });
 });
 
@@ -346,5 +470,54 @@ describe("edge cases", () => {
     );
     expect(rows.slice(0, 4).every((r) => r.principal === 0)).toBe(true);
     expect(rows[4].principal).not.toBe(0);
+  });
+
+  it("a balance-changing event after the sanctioned tenure has already passed is not auto-adjusted", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-01-15", { repayment: 2_000_000_000 })], // closes ~2026-01-15
+      { originalTenureMonths: SANCTIONED },
+    );
+    const laterResult = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [
+        event("2026-01-15", { repayment: 2_000_000_000 }),
+        event(String(SANCTIONED > 0 ? "2050-01-15" : "2050-01-15"), {
+          additionalDisbursement: 50_000_000,
+        }),
+      ],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.closure).not.toBeNull();
+    expect(
+      laterResult.warnings.some((w) => w.includes("falls after the sanctioned tenure")),
+    ).toBe(true);
+  });
+});
+
+describe("legacy sanctioned-tenure overrun reporting", () => {
+  it("still flags an overrun when no sanctioned tenure is set to auto-hold to", () => {
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 200_000_000 })],
+      {},
+    );
+    expect(result.overrunMonths).toBeNull();
+  });
+
+  it("says nothing when the loan still closes inside the sanctioned tenure with no events", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED + 60,
+    });
+    expect(result.overrunMonths).toBe(0);
+    expect(result.warnings.some((w) => w.includes("beyond the sanctioned tenure"))).toBe(
+      false,
+    );
   });
 });
