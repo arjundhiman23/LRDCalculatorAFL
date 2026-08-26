@@ -48,7 +48,6 @@ export const postDisbursementEventSchema = z.object({
   additionalDisbursement: z.number().min(0),
   repayment: z.number().min(0),
   revisedRoi: z.number().min(0.001).max(1).nullable(),
-  revisedEmi: z.number().min(0).nullable(),
   note: z.string().max(500).default(""),
 });
 
