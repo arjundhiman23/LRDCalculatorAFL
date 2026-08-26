@@ -1,16 +1,35 @@
 /** Post-disbursement events.
  *
  * Once a loan is disbursed the sanctioned schedule stops being the truth: the
- * borrower takes an additional disbursement, prepays, or the rate is reset. Each
- * such change carries an effective date, and from that date the loan runs on the
- * same rental cash flow until the balance clears — so the tenure, not the
- * instalment, absorbs the change.
+ * borrower takes an additional disbursement, prepays, the rate is reset, or the
+ * actual outstanding balance is restated. Each change carries an effective
+ * date.
  *
- * The mechanics are the workbook's (actual/365, interest rounded to whole
- * rupees at each due date, moratorium, final-month payoff); the only additions
- * are that an event may land on any day of the month, which splits the interest
- * period at the effective date, and that the schedule runs to closure rather
- * than to a fixed tenure.
+ * Two different levers absorb a change, depending on its kind:
+ *
+ * - A **revised ROI** or a **repayment** is allowed to move the closure date —
+ *   the tenure absorbs it, exactly as the workbook expects a rate reset or a
+ *   prepayment to shorten or lengthen the loan.
+ * - Anything else that changes the outstanding balance (an additional
+ *   disbursement, or restating the actual outstanding balance) is **not**
+ *   allowed to move the tenure. Instead the discounting factor (cash cover) on
+ *   the combined rental cash flow is solved automatically from that date
+ *   onward so the loan still closes at the **sanctioned tenure**
+ *   (`originalTenureMonths`) — the same lever `solveDiscountFactor` uses at
+ *   the eligibility stage, just applied mid-loan.
+ *
+ * If even a 100% cash cover cannot repay the loan by the sanctioned tenure,
+ * the cover is capped at 1 and the loan is left to run to its natural
+ * closure — the tenure is not artificially held, but the shortfall is
+ * reported as a warning. Likewise, the auto-adjusted cover minimises the
+ * negative-amortization months it can, but if some remain even at full cover
+ * they are reported rather than allowed to push the tenure out further.
+ *
+ * The mechanics below the cover computation are unchanged from before: an
+ * event may land on any day of the month, splitting the interest period at
+ * the effective date; rounding stays at the due date, so an event-free run is
+ * byte-identical to `simulate`; and the schedule runs to closure rather than a
+ * fixed tenure.
  */
 import { compareISO, diffDays, edate, firstDueDate } from "./dates";
 import { cashAt, netRentAt, simulate } from "./engine";
@@ -19,6 +38,8 @@ import type { EngineParams, LesseeInput, ScheduleRow } from "./types";
 /** How far the revised schedule is allowed to run before we give up on it
  * closing (the tenure ceiling accepted anywhere else in the app). */
 export const DEFAULT_HORIZON_MONTHS = 600;
+
+const DF_SOLVE_ITERATIONS = 100;
 
 export interface PostDisbursementEvent {
   /** Any day of the month; need not be a due date. */
@@ -30,11 +51,10 @@ export interface PostDisbursementEvent {
   /** Prepayment received on the effective date (over and above the
    * instalment). */
   repayment: number;
-  /** Annual rate in force from this date onward. */
+  /** Annual rate in force from this date onward. Along with a repayment, the
+   * only kind of change allowed to move the closure date — everything else
+   * holds the sanctioned tenure by adjusting the cash cover instead. */
   revisedRoi?: number | null;
-  /** Fixed instalment from this date onward, replacing the rent-derived
-   * amount. Null leaves the instalment linked to the rent. */
-  revisedEmi?: number | null;
   note?: string;
 }
 
@@ -46,31 +66,57 @@ export interface PostDisbursementRow extends ScheduleRow {
   /** Correction applied when an event stated the actual outstanding balance:
    * closing = opening + adjustment + disbursed − repaid − principal. */
   balanceAdjustment: number;
-  /** Rent-derived serviceable cash for the month, before any EMI override. */
+  /** Combined net-rent-derived cash at the base (unadjusted) cash cover, for
+   * reference against what was actually collected this month. */
   rentCash: number;
-  emiOverridden: boolean;
+  /** True when the auto-solved discounting factor is in force this month
+   * (i.e. a balance-changing event has fixed the cover to hold the
+   * sanctioned tenure). */
+  autoAdjusted: boolean;
   /** Events that took effect within this period. */
   events: PostDisbursementEvent[];
 }
 
-/** Month-by-month run of a disbursed loan with dated changes applied.
- * Rows m = 0..horizonMonths; the caller trims at closure. */
-export function simulateWithEvents(
+/** A cash-cover override in force from `fromDate` onward: the combined net
+ * rent of all lessees (not each lessee's own cover) is multiplied by
+ * `multiplier` instead. Later entries with an earlier-or-equal `fromDate`
+ * supersede earlier ones. */
+interface DiscountFactorOverride {
+  fromDate: string;
+  multiplier: number;
+}
+
+function combinedNetRentAt(lessees: LesseeInput[], date: string): number {
+  return lessees.reduce((s, l) => s + netRentAt(l, date), 0);
+}
+
+function activeOverride(
+  overrides: DiscountFactorOverride[],
+  dueDate: string,
+): DiscountFactorOverride | null {
+  let active: DiscountFactorOverride | null = null;
+  for (const o of overrides) {
+    if (compareISO(o.fromDate, dueDate) <= 0) active = o;
+  }
+  return active;
+}
+
+/** Month-by-month run of a disbursed loan with dated changes and (optionally)
+ * a piecewise cash-cover override applied. Rows m = 0..horizonMonths; the
+ * caller trims at closure. */
+function runSchedule(
   loan: number,
   horizonMonths: number,
   lessees: LesseeInput[],
   params: EngineParams,
-  events: PostDisbursementEvent[],
+  sortedEvents: PostDisbursementEvent[],
+  overrides: DiscountFactorOverride[],
 ): PostDisbursementRow[] {
-  const pending = [...events].sort((a, b) =>
-    compareISO(a.effectiveDate, b.effectiveDate),
-  );
   const d0 = firstDueDate(params.disbursementDate, params.dueDay);
   const rows: PostDisbursementRow[] = [];
   let balance = loan;
   let prev = params.disbursementDate;
   let roi = params.roi;
-  let emi: number | null = null;
   let nextEvent = 0;
 
   for (let m = 0; m <= horizonMonths; m++) {
@@ -88,10 +134,10 @@ export function simulateWithEvents(
     let accrued = 0;
     let cursor = prev;
     while (
-      nextEvent < pending.length &&
-      compareISO(pending[nextEvent].effectiveDate, dueDate) <= 0
+      nextEvent < sortedEvents.length &&
+      compareISO(sortedEvents[nextEvent].effectiveDate, dueDate) <= 0
     ) {
-      const event = pending[nextEvent];
+      const event = sortedEvents[nextEvent];
       // An event dated before the loan existed takes effect immediately.
       const at =
         compareISO(event.effectiveDate, cursor) < 0 ? cursor : event.effectiveDate;
@@ -108,9 +154,6 @@ export function simulateWithEvents(
       if (event.revisedRoi !== null && event.revisedRoi !== undefined) {
         roi = event.revisedRoi;
       }
-      if (event.revisedEmi !== null && event.revisedEmi !== undefined) {
-        emi = event.revisedEmi;
-      }
       applied.push(event);
       nextEvent++;
     }
@@ -119,7 +162,9 @@ export function simulateWithEvents(
 
     const netRent = lessees.reduce((s, l) => s + netRentAt(l, dueDate), 0);
     const rentCash = lessees.reduce((s, l) => s + cashAt(l, dueDate), 0);
-    const servicing = emi ?? rentCash;
+    const override = activeOverride(overrides, dueDate);
+    const servicing = override ? combinedNetRentAt(lessees, dueDate) * override.multiplier : rentCash;
+
     let principal: number;
     if (m <= params.moratoriumMonths) {
       principal = 0;
@@ -148,7 +193,7 @@ export function simulateWithEvents(
       repayment,
       balanceAdjustment,
       rentCash,
-      emiOverridden: emi !== null,
+      autoAdjusted: override !== null,
       events: applied,
     });
     balance = closing;
@@ -166,6 +211,100 @@ function closureRow<T extends ScheduleRow>(rows: T[]): T | null {
     candidate = rows[i];
   }
   return candidate && candidate.monthIndex > 0 ? candidate : null;
+}
+
+/** True when an event is allowed to move the closure date rather than being
+ * absorbed by an automatic cash-cover adjustment: a revised ROI or a
+ * repayment. */
+function isTenureMover(event: PostDisbursementEvent): boolean {
+  return (
+    (event.revisedRoi !== null && event.revisedRoi !== undefined) ||
+    event.repayment > 0
+  );
+}
+
+/** True when an event actually moves the outstanding balance in a way that
+ * needs compensating: an additional disbursement, or restating the balance. */
+function changesBalance(event: PostDisbursementEvent): boolean {
+  return (
+    event.additionalDisbursement > 0 ||
+    (event.outstandingBalance !== null && event.outstandingBalance !== undefined)
+  );
+}
+
+/** Solves the piecewise cash-cover overrides needed so every balance-changing
+ * event (other than a revised ROI or a repayment) holds the loan to the
+ * sanctioned tenure, in effective-date order. Each solve considers every
+ * override already fixed for earlier events. */
+function solveDiscountFactorOverrides(
+  loan: number,
+  lessees: LesseeInput[],
+  params: EngineParams,
+  sortedEvents: PostDisbursementEvent[],
+  sanctionedTenureMonths: number,
+): { overrides: DiscountFactorOverride[]; warnings: string[] } {
+  const overrides: DiscountFactorOverride[] = [];
+  const warnings: string[] = [];
+  const targetDueDate = edate(
+    firstDueDate(params.disbursementDate, params.dueDay),
+    sanctionedTenureMonths,
+  );
+
+  for (const event of sortedEvents) {
+    if (isTenureMover(event) || !changesBalance(event)) continue;
+
+    if (compareISO(event.effectiveDate, targetDueDate) > 0) {
+      warnings.push(
+        `The change on ${event.effectiveDate} falls after the sanctioned tenure ` +
+          `ends (${targetDueDate}); it could not be absorbed by an automatic ` +
+          `discounting-factor adjustment.`,
+      );
+      continue;
+    }
+
+    const endingAt = (multiplier: number): number => {
+      const trial = [...overrides, { fromDate: event.effectiveDate, multiplier }];
+      const rows = runSchedule(
+        loan,
+        sanctionedTenureMonths,
+        lessees,
+        params,
+        sortedEvents,
+        trial,
+      );
+      return rows[rows.length - 1].closingBalance;
+    };
+
+    let resolved: number;
+    if (endingAt(1) > 0) {
+      // Even full cash cover cannot repay the loan by the sanctioned tenure.
+      resolved = 1;
+      warnings.push(
+        `Even a 100% cash cover cannot repay the loan by the sanctioned tenure ` +
+          `after the change on ${event.effectiveDate}; the discounting factor has ` +
+          `been capped at 1.00 and the loan will run longer than sanctioned.`,
+      );
+    } else if (endingAt(0) <= 0) {
+      resolved = 0;
+    } else {
+      let lo = 0;
+      let hi = 1;
+      for (let i = 0; i < DF_SOLVE_ITERATIONS; i++) {
+        const mid = (lo + hi) / 2;
+        if (endingAt(mid) > 0) lo = mid;
+        else hi = mid;
+      }
+      resolved = hi;
+      warnings.push(
+        `Discounting factor automatically adjusted to ${(resolved * 100).toFixed(1)}% ` +
+          `from ${event.effectiveDate} to hold the sanctioned tenure of ` +
+          `${sanctionedTenureMonths} months.`,
+      );
+    }
+    overrides.push({ fromDate: event.effectiveDate, multiplier: resolved });
+  }
+
+  return { overrides, warnings };
 }
 
 export interface Closure {
@@ -210,10 +349,26 @@ export function computePostDisbursement(
   options: { horizonMonths?: number; originalTenureMonths?: number | null } = {},
 ): PostDisbursementResult {
   const horizon = options.horizonMonths ?? DEFAULT_HORIZON_MONTHS;
+  const sanctioned = options.originalTenureMonths ?? null;
   const sorted = [...events].sort((a, b) =>
     compareISO(a.effectiveDate, b.effectiveDate),
   );
-  const full = simulateWithEvents(loan, horizon, lessees, params, sorted);
+
+  const warnings: string[] = [];
+  let overrides: DiscountFactorOverride[] = [];
+  if (sanctioned && sanctioned > 0) {
+    const solved = solveDiscountFactorOverrides(loan, lessees, params, sorted, sanctioned);
+    overrides = solved.overrides;
+    warnings.push(...solved.warnings);
+  } else if (sorted.some((e) => changesBalance(e) && !isTenureMover(e))) {
+    warnings.push(
+      `Set a sanctioned tenure to hold the loan to it automatically — without one, ` +
+        `additional disbursements and balance restatements move the closure date ` +
+        `instead.`,
+    );
+  }
+
+  const full = runSchedule(loan, horizon, lessees, params, sorted, overrides);
   const baselineFull = simulate(loan, horizon, lessees, params);
 
   const closure = closureRow(full);
@@ -236,7 +391,6 @@ export function computePostDisbursement(
     (r) => r.monthIndex > params.moratoriumMonths && r.principal < 0,
   ).length;
 
-  const warnings: string[] = [];
   for (const event of sorted) {
     if (compareISO(event.effectiveDate, params.disbursementDate) < 0) {
       warnings.push(
@@ -247,7 +401,7 @@ export function computePostDisbursement(
   }
   if (!closure) {
     warnings.push(
-      `The balance does not clear within ${horizon} months — the instalment is ` +
+      `The balance does not clear within ${horizon} months — the cash flow is ` +
         `too small for the outstanding amount at this rate.`,
     );
   }
@@ -260,7 +414,6 @@ export function computePostDisbursement(
         `${first.dueDate}: the balance grows instead of reducing.`,
     );
   }
-  const sanctioned = options.originalTenureMonths ?? null;
   if (closure && sanctioned && closure.monthIndex > sanctioned) {
     warnings.push(
       `Closure now falls ${closure.monthIndex - sanctioned} month(s) beyond the ` +
@@ -316,4 +469,20 @@ export function computePostDisbursement(
     fullyRepaid: closure !== null,
     warnings,
   };
+}
+
+/** Kept for callers that want the mechanical event application without the
+ * automatic cash-cover solve (e.g. tests exercising `runSchedule` directly
+ * through the public surface). Equivalent to `runSchedule` with no override. */
+export function simulateWithEvents(
+  loan: number,
+  horizonMonths: number,
+  lessees: LesseeInput[],
+  params: EngineParams,
+  events: PostDisbursementEvent[],
+): PostDisbursementRow[] {
+  const sorted = [...events].sort((a, b) =>
+    compareISO(a.effectiveDate, b.effectiveDate),
+  );
+  return runSchedule(loan, horizonMonths, lessees, params, sorted, []);
 }
