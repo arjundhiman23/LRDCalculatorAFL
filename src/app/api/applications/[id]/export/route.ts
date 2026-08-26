@@ -316,27 +316,24 @@ export const GET = handler(async (_req: Request, { params }: Ctx) => {
         "Additional disbursement",
         "Repayment",
         "Revised ROI",
-        "Revised EMI",
         "Outstanding stated",
         "Note",
       ]);
       evHead.font = { bold: true };
-      for (let c = 3; c <= 7; c++) pdWs.getColumn(c).width = 22;
+      for (let c = 3; c <= 6; c++) pdWs.getColumn(c).width = 22;
       for (const e of pd.events) {
         const row = pdWs.addRow([
           e.effectiveDate,
           e.additionalDisbursement,
           e.repayment,
           e.revisedRoi ?? "—",
-          e.revisedEmi ?? "—",
           e.outstandingBalance ?? "—",
           e.note ?? "",
         ]);
         row.getCell(2).numFmt = MONEY;
         row.getCell(3).numFmt = MONEY;
         if (e.revisedRoi != null) row.getCell(4).numFmt = PCT;
-        if (e.revisedEmi != null) row.getCell(5).numFmt = MONEY;
-        if (e.outstandingBalance != null) row.getCell(6).numFmt = MONEY;
+        if (e.outstandingBalance != null) row.getCell(5).numFmt = MONEY;
       }
     }
 
