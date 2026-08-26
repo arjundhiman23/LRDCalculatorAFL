@@ -104,7 +104,6 @@ export async function saveApplication(id: string, raw: unknown): Promise<void> {
           additionalDisbursement: e.additionalDisbursement,
           repayment: e.repayment,
           revisedRoi: e.revisedRoi,
-          revisedEmi: e.revisedEmi,
           note: e.note,
         })),
       });
