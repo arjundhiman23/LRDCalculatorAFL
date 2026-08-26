@@ -19,6 +19,7 @@ import {
   Field,
   NumberInput,
   PercentInput,
+  Select,
   Spinner,
   TextInput,
 } from "../ui";
@@ -34,9 +35,11 @@ import { ScheduleTable } from "./ResultsTab";
 export function PostDisbursementTab({
   app,
   update,
+  standardTenures,
 }: {
   app: ApplicationPayload;
   update: (fn: (a: ApplicationPayload) => ApplicationPayload) => void;
+  standardTenures: number[];
 }) {
   // Keyed by the inputs it was computed from, so a stale run is visible
   // without having to write state from the effect body.
@@ -165,12 +168,10 @@ export function PostDisbursementTab({
             label="Sanctioned tenure"
             hint="The cash cover is auto-solved to hold to this, from the disbursement itself onward"
           >
-            <NumberInput
+            <SanctionedTenureField
               value={app.proposedTenure}
-              min={1}
-              onChange={(v) =>
-                update((a) => ({ ...a, proposedTenure: v ? Math.round(v) : null }))
-              }
+              standardTenures={standardTenures}
+              onChange={(v) => update((a) => ({ ...a, proposedTenure: v }))}
             />
           </Field>
         </div>
@@ -301,6 +302,59 @@ export function PostDisbursementTab({
             schedule.
           </p>
         </Card>
+      )}
+    </div>
+  );
+}
+
+/** Sanctioned tenure picker: the standard tenures (same set used on the
+ * Eligibility results tab) plus a "Custom" option that reveals a free-entry
+ * field. Falls back to custom mode when the stored value doesn't match any
+ * standard tenure (e.g. an older application, or one entered before this
+ * picker existed). */
+function SanctionedTenureField({
+  value,
+  standardTenures,
+  onChange,
+}: {
+  value: number | null;
+  standardTenures: number[];
+  onChange: (v: number | null) => void;
+}) {
+  const isCustomValue = value !== null && !standardTenures.includes(value);
+  const [customMode, setCustomMode] = useState(isCustomValue);
+
+  const options = [
+    { value: "", label: "Select tenure…" },
+    ...standardTenures.map((t) => ({ value: String(t), label: `${t} months` })),
+    { value: "custom", label: "Custom" },
+  ];
+  const selectValue = customMode ? "custom" : value !== null ? String(value) : "";
+
+  return (
+    <div className="space-y-2">
+      <Select
+        value={selectValue}
+        onChange={(v) => {
+          if (v === "custom") {
+            setCustomMode(true);
+          } else if (v === "") {
+            setCustomMode(false);
+            onChange(null);
+          } else {
+            setCustomMode(false);
+            onChange(Number(v));
+          }
+        }}
+        options={options}
+      />
+      {customMode && (
+        <NumberInput
+          value={value}
+          min={1}
+          placeholder="e.g. 108"
+          onChange={(v) => onChange(v ? Math.round(v) : null)}
+        />
       )}
     </div>
   );
@@ -584,4 +638,5 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
     </div>
   );
 }
+
 
