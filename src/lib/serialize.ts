@@ -62,7 +62,6 @@ export function postDisbursementEventToPayload(
     additionalDisbursement: e.additionalDisbursement,
     repayment: e.repayment,
     revisedRoi: e.revisedRoi,
-    revisedEmi: e.revisedEmi,
     note: e.note,
   };
 }
@@ -124,7 +123,6 @@ export function eventToEngineInput(
     additionalDisbursement: e.additionalDisbursement,
     repayment: e.repayment,
     revisedRoi: e.revisedRoi,
-    revisedEmi: e.revisedEmi,
     note: e.note,
   };
 }
