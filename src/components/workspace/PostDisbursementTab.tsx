@@ -25,8 +25,10 @@ import {
 import { ScheduleTable } from "./ResultsTab";
 
 /** The loan after it has been disbursed: dated changes (additional
- * disbursement, prepayment, rate reset, revised instalment) are applied to the
- * running schedule, and the tenure moves to absorb them. */
+ * disbursement, prepayment, rate reset, restated balance) are applied to the
+ * running schedule. A revised ROI or a repayment moves the closure date;
+ * anything else instead holds the sanctioned tenure by auto-adjusting the
+ * discounting factor on the combined rental cash flow from that date. */
 export function PostDisbursementTab({
   app,
   update,
@@ -133,7 +135,6 @@ export function PostDisbursementTab({
         additionalDisbursement: 0,
         repayment: 0,
         revisedRoi: null,
-        revisedEmi: null,
         note: "",
       },
     ]);
@@ -160,7 +161,7 @@ export function PostDisbursementTab({
           </Field>
           <Field
             label="Sanctioned tenure"
-            hint="For reference; the revised tenure is computed below"
+            hint="Additional disbursements and balance restatements hold to this by auto-adjusting the cash cover"
           >
             <NumberInput
               value={app.proposedTenure}
@@ -171,6 +172,13 @@ export function PostDisbursementTab({
             />
           </Field>
         </div>
+        {!app.proposedTenure && (
+          <p className="mt-3 text-xs text-amber-700">
+            Set a sanctioned tenure to hold the loan to it automatically. Without one,
+            additional disbursements and balance restatements move the closure date
+            instead.
+          </p>
+        )}
         {loanAmount <= 0 && (
           <p className="mt-3 text-xs text-amber-700">
             Enter the disbursed amount to build the schedule.
@@ -213,8 +221,10 @@ export function PostDisbursementTab({
         )}
         <p className="mt-4 text-xs text-slate-400">
           A change takes effect on its own date — any day of the month, not only a due
-          date — and interest for that month is split at it. The instalment stays tied
-          to the rent unless you fix it, so the closure date moves instead.
+          date — and interest for that month is split at it. A revised ROI or a
+          repayment moves the closure date; an additional disbursement or a restated
+          outstanding balance instead holds the sanctioned tenure by automatically
+          adjusting the discounting factor on the combined rental cash flow.
         </p>
       </Card>
 
@@ -314,28 +324,28 @@ function EventRow({
           Remove
         </Button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Field label="Effective date">
           <DateInput
             value={event.effectiveDate}
             onChange={(v) => onChange({ effectiveDate: v ?? event.effectiveDate })}
           />
         </Field>
-        <Field label="Additional disbursement">
+        <Field label="Additional disbursement" hint="Holds the sanctioned tenure">
           <NumberInput
             value={event.additionalDisbursement}
             min={0}
             onChange={(v) => onChange({ additionalDisbursement: v ?? 0 })}
           />
         </Field>
-        <Field label="Repayment received">
+        <Field label="Repayment received" hint="Moves the closure date">
           <NumberInput
             value={event.repayment}
             min={0}
             onChange={(v) => onChange({ repayment: v ?? 0 })}
           />
         </Field>
-        <Field label="Revised ROI" hint="Blank keeps the current rate">
+        <Field label="Revised ROI" hint="Blank keeps the rate; moves the closure date">
           {event.revisedRoi === null ? (
             <button
               className="w-full rounded-lg border border-dashed border-slate-300 px-3 py-1.5 text-sm text-slate-400 hover:border-slate-400 hover:text-slate-600"
@@ -357,21 +367,13 @@ function EventRow({
         </Field>
         <Field
           label="Outstanding on that date"
-          hint="Blank uses the projected balance"
+          hint="Blank uses the projected balance; holds the sanctioned tenure"
         >
           <NumberInput
             value={event.outstandingBalance}
             min={0}
             placeholder="projected"
             onChange={(v) => onChange({ outstandingBalance: v })}
-          />
-        </Field>
-        <Field label="Revised EMI" hint="Blank keeps it rent-linked">
-          <NumberInput
-            value={event.revisedEmi}
-            min={0}
-            placeholder="from rent"
-            onChange={(v) => onChange({ revisedEmi: v })}
           />
         </Field>
       </div>
@@ -494,13 +496,14 @@ function SummaryCards({
 function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
   return (
     <div className="max-h-[520px] overflow-auto rounded-lg border border-slate-100">
-      <table className="w-full min-w-[1040px] text-xs">
+      <table className="w-full min-w-[1120px] text-xs">
         <thead className="sticky top-0 bg-slate-50 text-left uppercase tracking-wide text-slate-400">
           <tr>
             <th className="px-3 py-2 font-medium">#</th>
             <th className="px-3 py-2 font-medium">Due date</th>
             <th className="px-3 py-2 font-medium">Days</th>
             <th className="px-3 py-2 text-right font-medium">ROI</th>
+            <th className="px-3 py-2 text-right font-medium">DF</th>
             <th className="px-3 py-2 text-right font-medium">Opening</th>
             <th className="px-3 py-2 text-right font-medium">Disbursed</th>
             <th className="px-3 py-2 text-right font-medium">Repaid</th>
@@ -541,6 +544,12 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
                 <td className="px-3 py-1.5 text-right text-slate-400">
                   {formatPct(r.roi)}
                 </td>
+                <td className="px-3 py-1.5 text-right">
+                  {r.discountFactor.toFixed(2)}
+                  {r.autoAdjusted && (
+                    <span className="ml-1 text-[10px] text-blue-600">auto</span>
+                  )}
+                </td>
                 <td className="px-3 py-1.5 text-right">{formatINR(r.openingBalance)}</td>
                 <td className="px-3 py-1.5 text-right text-blue-700">
                   {r.additionalDisbursement ? formatINR(r.additionalDisbursement) : "—"}
@@ -554,12 +563,7 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
                 >
                   {formatINR(r.principal)}
                 </td>
-                <td className="px-3 py-1.5 text-right">
-                  {formatINR(r.instalment)}
-                  {r.emiOverridden && (
-                    <span className="ml-1 text-[10px] text-slate-400">fixed</span>
-                  )}
-                </td>
+                <td className="px-3 py-1.5 text-right">{formatINR(r.instalment)}</td>
                 <td className="px-3 py-1.5 text-right font-medium">
                   {formatINR(r.closingBalance)}
                 </td>
@@ -571,7 +575,8 @@ function RevisedScheduleTable({ rows }: { rows: PostDisbursementRow[] }) {
       <p className="border-t border-slate-100 bg-white px-3 py-2 text-[11px] text-slate-400">
         Blue rows carry a change; amber rows do not cover that month&apos;s interest.
         A row where the outstanding balance was restated shows the correction in the
-        opening-to-closing movement.
+        opening-to-closing movement. &quot;auto&quot; marks a discounting factor solved
+        automatically to hold the sanctioned tenure.
       </p>
     </div>
   );
