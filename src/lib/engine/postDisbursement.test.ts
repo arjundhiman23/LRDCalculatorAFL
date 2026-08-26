@@ -80,12 +80,17 @@ describe("post-disbursement run with no events", () => {
     expect(result.totalRepayment).toBe(0);
   });
 
-  it("also holds with a sanctioned tenure set and no events (nothing to adjust)", () => {
+  it("auto-solves the initial disbursement to hold the sanctioned tenure, even with no events", () => {
     const result = computePostDisbursement(LOAN, [lessee], params, [], {
       originalTenureMonths: SANCTIONED,
     });
     expect(result.revisedTenureMonths).toBe(SANCTIONED);
-    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
+    // The lessee's own cash cover already hits this tenure almost exactly
+    // (SANCTIONED was derived from it), so the solved cover should land very
+    // close to the lessee's configured 0.9 — not a different order of
+    // magnitude — and every row is now flagged as auto-adjusted.
+    expect(result.schedule.every((r) => r.autoAdjusted)).toBe(true);
+    expect(result.schedule[0].discountFactor).toBeCloseTo(0.9, 1);
   });
 });
 
@@ -177,7 +182,7 @@ describe("with a sanctioned tenure, additional disbursements hold the tenure", (
     expect(result.tenureChangeMonths).toBe(0);
   });
 
-  it("auto-adjusts the discounting factor from the event's date onward", () => {
+  it("re-solves the discounting factor higher from the event's date onward", () => {
     const result = computePostDisbursement(
       LOAN,
       [lessee],
@@ -187,7 +192,9 @@ describe("with a sanctioned tenure, additional disbursements hold the tenure", (
     );
     const before = result.schedule.find((r) => r.dueDate === "2026-02-15")!;
     const after = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
-    expect(before.autoAdjusted).toBe(false);
+    // Both are auto-adjusted now — the initial disbursement solves its own
+    // cover too — but the event re-solves a higher one from its date.
+    expect(before.autoAdjusted).toBe(true);
     expect(after.autoAdjusted).toBe(true);
     // More cover is needed to absorb the extra principal within the same tenure.
     expect(after.discountFactor).toBeGreaterThan(before.discountFactor);
@@ -196,7 +203,10 @@ describe("with a sanctioned tenure, additional disbursements hold the tenure", (
     ).toBe(true);
   });
 
-  it("leaves the months before the effective date untouched", () => {
+  it("leaves the months before the effective date matching the sanctioned no-event run", () => {
+    const sanctionedBaseline = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
     const result = computePostDisbursement(
       LOAN,
       [lessee],
@@ -205,9 +215,9 @@ describe("with a sanctioned tenure, additional disbursements hold the tenure", (
       { originalTenureMonths: SANCTIONED },
     );
     const before = result.schedule.filter((r) => r.dueDate < "2026-03-15");
-    const baseline = result.baseline.filter((r) => r.dueDate < "2026-03-15");
+    const reference = sanctionedBaseline.schedule.filter((r) => r.dueDate < "2026-03-15");
     expect(before.map((r) => r.closingBalance)).toEqual(
-      baseline.map((r) => r.closingBalance),
+      reference.map((r) => r.closingBalance),
     );
   });
 
@@ -291,7 +301,9 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
     expect(result.totalRepayment).toBe(150_000_000);
     expect(result.tenureChangeMonths!).toBeLessThan(0);
     expect(result.revisedTenureMonths).not.toBe(SANCTIONED);
-    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
+    // The repayment doesn't get its own re-solve, but the initial
+    // disbursement's cover (solved from day one) still covers the whole life.
+    expect(result.schedule.every((r) => r.autoAdjusted)).toBe(true);
   });
 
   it("a revised ROI moves the tenure even with a sanctioned tenure set", () => {
@@ -304,7 +316,7 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
     );
     expect(result.tenureChangeMonths!).toBeGreaterThan(0);
     expect(result.revisedTenureMonths).not.toBe(SANCTIONED);
-    expect(result.schedule.every((r) => !r.autoAdjusted)).toBe(true);
+    expect(result.schedule.every((r) => r.autoAdjusted)).toBe(true);
   });
 
   it("clears the loan outright when a repayment covers the whole balance", () => {
@@ -321,16 +333,27 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
 
   it("an additional disbursement combined with a repayment in the same event is treated as a tenure mover", () => {
     // The literal rule: a revised ROI or a repayment in the event is what
-    // lets tenure move, regardless of what else the event also does.
-    const result = computePostDisbursement(
+    // lets tenure move, regardless of what else the event also does — so no
+    // *new* cover is solved for this event specifically. The initial
+    // disbursement's own solved cover (from day one) still applies, since
+    // nothing has superseded it.
+    const withEvent = computePostDisbursement(
       LOAN,
       [lessee],
       params,
       [event("2026-03-07", { additionalDisbursement: 50_000_000, repayment: 10_000_000 })],
       { originalTenureMonths: SANCTIONED },
     );
-    const row = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
-    expect(row.autoAdjusted).toBe(false);
+    const noEvent = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
+    const before = withEvent.schedule.find((r) => r.dueDate === "2026-02-15")!;
+    const after = withEvent.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    const noEventDf = noEvent.schedule.find((r) => r.dueDate === "2026-03-15")!.discountFactor;
+    expect(before.autoAdjusted).toBe(true);
+    expect(after.autoAdjusted).toBe(true);
+    // The cover itself is untouched by this event — same as the no-event run.
+    expect(after.discountFactor).toBeCloseTo(noEventDf, 6);
   });
 });
 
@@ -433,6 +456,61 @@ describe("sequential auto-adjusting events cumulatively hold the tenure", () => 
     expect(result.revisedTenureMonths).toBe(SANCTIONED);
     const afterSecond = result.schedule.find((r) => r.dueDate === "2028-01-15")!;
     expect(afterSecond.autoAdjusted).toBe(true);
+  });
+});
+
+describe("a segment's solve never looks ahead to a later event's effect", () => {
+  it("the initial disbursement's cover matches the no-events run, unaffected by a much later balance restatement", () => {
+    // Regression test: an earlier version of the solve fed *all* events
+    // (including future ones) into the trial used to solve the initial
+    // disbursement's cover, so it silently pre-inflated the cover in
+    // anticipation of a change that, in reality, hasn't happened yet as of
+    // that date. The initial segment must only ever depend on what's known
+    // up to its own date.
+    const noEvents = computePostDisbursement(LOAN, [lessee], params, [], {
+      originalTenureMonths: SANCTIONED,
+    });
+    const withFutureEvent = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-06-15", { outstandingBalance: 1_000_000_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const before = withFutureEvent.schedule.filter((r) => r.dueDate < "2026-06-15");
+    const reference = noEvents.schedule.filter((r) => r.dueDate < "2026-06-15");
+    expect(before.map((r) => r.closingBalance)).toEqual(
+      reference.map((r) => r.closingBalance),
+    );
+  });
+
+  it("an intermediate segment's cover is unaffected by a still-later event", () => {
+    const twoEvents = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [
+        event("2026-03-07", { additionalDisbursement: 40_000_000 }),
+        event("2029-01-15", { additionalDisbursement: 300_000_000 }),
+      ],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const oneEvent = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2026-03-07", { additionalDisbursement: 40_000_000 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    const before = twoEvents.schedule.filter(
+      (r) => r.dueDate >= "2026-03-15" && r.dueDate < "2029-01-15",
+    );
+    const reference = oneEvent.schedule.filter(
+      (r) => r.dueDate >= "2026-03-15" && r.dueDate < "2029-01-15",
+    );
+    expect(before.map((r) => r.closingBalance)).toEqual(
+      reference.map((r) => r.closingBalance),
+    );
   });
 });
 
