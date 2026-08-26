@@ -455,7 +455,7 @@ function LesseeEditor({
                   ...escalations,
                   {
                     rate: escalations[escalations.length - 1]?.rate ?? 0.15,
-                    monthsAfterPrevious: 36,
+                    monthsAfterPrevious: escalations.length === 0 ? 0 : 36,
                     discountFactor: null,
                   },
                 ],
@@ -507,13 +507,11 @@ function LesseeEditor({
                     <NumberInput
                       value={e.monthsAfterPrevious}
                       min={0}
-                      disabled={i === 0}
                       onChange={(v) =>
                         setEscalation(i, {
                           monthsAfterPrevious: Math.max(0, Math.round(v ?? 0)),
                         })
                       }
-                      placeholder={i === 0 ? "uses date above" : ""}
                     />
                   </td>
                   <td className="py-1 pr-3">
@@ -598,3 +596,4 @@ function EscalationPreview({ lessee }: { lessee: LesseePayload }) {
     </div>
   );
 }
+
