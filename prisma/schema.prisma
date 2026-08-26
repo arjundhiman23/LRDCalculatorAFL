@@ -72,8 +72,10 @@ model Application {
 }
 
 /// A change to an already-disbursed loan, taking effect on a date: an
-/// additional disbursement, a prepayment, or a rate reset. The instalment stays
-/// tied to the rent unless overridden, so the tenure absorbs the change.
+/// additional disbursement, a prepayment, a rate reset, or a restated
+/// outstanding balance. A revised ROI or a repayment is allowed to move the
+/// closure date; anything else instead holds the sanctioned tenure by
+/// auto-adjusting the cash cover (see src/lib/engine/postDisbursement.ts).
 model PostDisbursementEvent {
   id            String      @id @default(cuid())
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
@@ -86,10 +88,11 @@ model PostDisbursementEvent {
   outstandingBalance     Float?
   additionalDisbursement Float   @default(0)
   repayment              Float   @default(0)
-  /// Annual rate from this date onward; null keeps the rate in force.
+  /// Annual rate from this date onward; null keeps the rate in force. Along
+  /// with a repayment, the only kind of change allowed to move the closure
+  /// date — everything else holds the sanctioned tenure by adjusting the
+  /// cash cover instead (see src/lib/engine/postDisbursement.ts).
   revisedRoi             Float?
-  /// Fixed instalment from this date onward; null keeps it rent-linked.
-  revisedEmi             Float?
   note                   String  @default("")
 
   @@unique([applicationId, position])
