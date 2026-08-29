@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { simulate } from "./engine";
+import { netRentAt, simulate } from "./engine";
 import fixture from "./__fixtures__/hivale-lan1.json";
 import {
   computePostDisbursement,
@@ -288,6 +288,104 @@ describe("matches the reference workbook's interest on a disbursement month", ()
     );
     expect(carried + fresh).toBe(348_840);
     expect(roundedTotal).toBe(348_841);
+  });
+});
+
+/** The full engine, end to end, against the Hivale case — not just the
+ * interest formula in isolation. A single lessee's escalations are set to
+ * reproduce the workbook's own net-rent path exactly (rate/gap pairs derived
+ * from its recorded escalation points), then the whole loan — both
+ * disbursements, the sanctioned tenure, the auto-solved cover — runs through
+ * `computePostDisbursement` unmodified. */
+describe("reproduces the reference workbook end to end (not just its interest formula)", () => {
+  const hivaleLessee: LesseeInput = {
+    name: "Hivale combined",
+    grossRent: 807_463,
+    tdsRate: 0,
+    propertyTaxRate: 0,
+    insuranceRate: 0,
+    otherDeduction: 0,
+    discountFactor: 1, // irrelevant — auto-solved once a sanctioned tenure is set
+    firstEscalationDate: "2027-02-15",
+    escalations: [
+      { rate: 0.01973341193342605, monthsAfterPrevious: 0 },
+      { rate: 0.035188372073252636, monthsAfterPrevious: 10 },
+      { rate: 0.018693737820737685, monthsAfterPrevious: 2 },
+      { rate: 0.09221183800623053, monthsAfterPrevious: 36 },
+      { rate: 0.09702827895775186, monthsAfterPrevious: 36 },
+    ],
+  };
+  const hivaleParams: EngineParams = {
+    roi: 0.11,
+    disbursementDate: "2025-11-30",
+    dueDay: 15,
+    moratoriumMonths: 0,
+    propertyValue: null,
+  };
+  const hivaleEvents = fixture.events.map((e) =>
+    event(e.effectiveDate, { additionalDisbursement: e.additionalDisbursement }),
+  );
+
+  it("reproduces every one of the 181 recorded net rent figures", () => {
+    const mismatches = fixture.schedule.filter(
+      (row) => Math.round(netRentAt(hivaleLessee, row.dueDate)) !== row.netRent,
+    );
+    expect(mismatches).toEqual([]);
+  });
+
+  it("closes at exactly the sanctioned tenure, on the workbook's own date", () => {
+    const result = computePostDisbursement(
+      fixture.loan,
+      [hivaleLessee],
+      hivaleParams,
+      hivaleEvents,
+      { originalTenureMonths: fixture.sanctionedTenureMonths },
+    );
+    expect(result.closure).toEqual({ monthIndex: 180, dueDate: "2040-12-15" });
+    expect(result.overrunMonths).toBe(0);
+    expect(result.negativeMonths).toBe(0);
+  });
+
+  it("auto-solves a cover in each of the workbook's three regimes, within its rounding plateau", () => {
+    const result = computePostDisbursement(
+      fixture.loan,
+      [hivaleLessee],
+      hivaleParams,
+      hivaleEvents,
+      { originalTenureMonths: fixture.sanctionedTenureMonths },
+    );
+    for (const regime of fixture.dfRegimes) {
+      const row = result.schedule.find((r) => r.monthIndex === regime.fromMonth)!;
+      // Rupee-level rounding of interest means a whole *range* of covers
+      // closes the loan exactly at month 180 — the workbook's Goal Seek and
+      // our bisection can land at different points in that same range (see
+      // "sits at the top of the plateau" in engine.test.ts for the same
+      // phenomenon on the eligibility solver). Within 0.01% confirms we're
+      // in the workbook's plateau, not somewhere else entirely.
+      expect(row.discountFactor).toBeCloseTo(regime.df, 3);
+    }
+  });
+
+  it("both the workbook's own cover and ours close the loan exactly — confirming a plateau, not a bug", () => {
+    // If moving the cover down still closes exactly, it's a genuine
+    // rounding plateau; if only one exact value works, a mismatch would be
+    // a real bug rather than rounding noise.
+    const oursExact = simulateWithEvents(
+      fixture.loan,
+      fixture.sanctionedTenureMonths,
+      [{ ...hivaleLessee, discountFactor: 0.4954362881298666 }],
+      hivaleParams,
+      [],
+    ).at(-1)!.closingBalance;
+    const workbooksExact = simulateWithEvents(
+      fixture.loan,
+      fixture.sanctionedTenureMonths,
+      [{ ...hivaleLessee, discountFactor: fixture.dfRegimes[0].df }],
+      hivaleParams,
+      [],
+    ).at(-1)!.closingBalance;
+    expect(Math.abs(oursExact)).toBeLessThan(1);
+    expect(Math.abs(workbooksExact)).toBeLessThan(1);
   });
 });
 
