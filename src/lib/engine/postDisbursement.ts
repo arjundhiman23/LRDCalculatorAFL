@@ -31,10 +31,13 @@
  * negative-amortization months it can, but if some remain even at full cover
  * they are reported rather than allowed to push the tenure out further.
  *
- * The mechanics below the cover computation are unchanged from before: an
- * event may land on any day of the month, splitting the interest period at
- * the effective date; rounding stays at the due date; and the schedule runs
- * to closure rather than a fixed tenure.
+ * An event may land on any day of the month, and the schedule runs to closure
+ * rather than a fixed tenure. Interest in a month where money moves follows
+ * the RM team's Step-Up LRD workbook rather than a plain split: the balance
+ * carried in is charged for the whole month, money that arrives or leaves is
+ * charged (or credited) only for its part-period, and each component is
+ * rounded to the rupee before being summed. `runSchedule` documents this in
+ * full; it reproduces the reference Hivale schedule across all 181 rows.
  */
 import { compareISO, diffDays, edate, firstDueDate } from "./dates";
 import { cashAt, netRentAt, simulate } from "./engine";
@@ -132,11 +135,41 @@ function runSchedule(
     let balanceAdjustment = 0;
     const applied: PostDisbursementEvent[] = [];
 
-    // Interest accrues on the balance in force over each sub-period, so an
-    // event mid-month is charged at the old rate up to its effective date and
-    // at the new one after it. Rounding stays at the due date, as in the
-    // workbook, which keeps an event-free run identical to `simulate`.
+    // Interest follows the RM team's workbook convention, which is *not* a
+    // plain split of the whole balance at the effective date:
+    //
+    //   - The balance carried into the month is charged for the FULL month,
+    //     as though nothing had happened.
+    //   - New money (an additional disbursement, or the increase from a
+    //     restated balance) is charged separately, only from its own
+    //     effective date to the due date.
+    //   - Money leaving (a repayment, or a decrease from a restatement) stops
+    //     earning from its effective date, so it is credited back the
+    //     part-period it no longer covers.
+    //
+    // A revised ROI still applies from its effective date onward, so a rate
+    // reset splits the carried balance the ordinary way.
+    //
+    // Each component is rounded to the rupee on its own before being summed,
+    // not rounded once at the end. The workbook does this because it shows a
+    // disbursement's interest on its own helper row, and that displayed
+    // (already rounded) figure is what feeds the month's total — so summing
+    // the unrounded parts can differ by a rupee.
+    //
+    // Worked example (Hivale LAN 1, month 3): the 3.99 Cr carried in is
+    // charged all 28 days (₹3,37,087) and the 26 L disbursed on the 28th is
+    // charged its 15 days (₹11,753), totalling ₹3,48,840 — the workbook's
+    // figure to the rupee. Rounding the sum instead would give ₹3,48,841.
+    //
+    // The carried balance accrues as ONE component across the whole month
+    // (split only where the rate changes); money that moves mid-month adds
+    // its own separately-rounded component. Splitting the carried balance at
+    // every event date instead would round it twice and drift by a rupee.
     let accrued = 0;
+    // Interest on the balance carried in, accumulated unrounded and only
+    // committed when the rate changes or the month ends.
+    const carriedBalance = balance;
+    let carriedAccrual = 0;
     let cursor = prev;
     while (
       nextEvent < sortedEvents.length &&
@@ -146,24 +179,43 @@ function runSchedule(
       // An event dated before the loan existed takes effect immediately.
       const at =
         compareISO(event.effectiveDate, cursor) < 0 ? cursor : event.effectiveDate;
-      accrued += (balance * diffDays(cursor, at) * roi) / 365;
+      carriedAccrual += (carriedBalance * diffDays(cursor, at) * roi) / 365;
       cursor = at;
 
+      let delta = 0;
       if (event.outstandingBalance !== null && event.outstandingBalance !== undefined) {
-        balanceAdjustment += event.outstandingBalance - balance;
+        const adjustment = event.outstandingBalance - balance;
+        balanceAdjustment += adjustment;
         balance = event.outstandingBalance;
+        delta += adjustment;
       }
-      balance += event.additionalDisbursement - event.repayment;
+      const movement = event.additionalDisbursement - event.repayment;
+      balance += movement;
+      delta += movement;
       additionalDisbursement += event.additionalDisbursement;
       repayment += event.repayment;
+
+      // A rate reset applies from here on. `cursor` is already at the change
+      // date and the carried balance's accrual up to it has been banked
+      // above, so the closing accrual below picks up the new rate for the
+      // remainder of the month without any further bookkeeping.
       if (event.revisedRoi !== null && event.revisedRoi !== undefined) {
         roi = event.revisedRoi;
+      }
+
+      // The money that moved earns (or stops earning) only for the remainder
+      // of the month, while the carried balance keeps running to the due date.
+      if (delta !== 0) {
+        accrued += Math.round((delta * diffDays(at, dueDate) * roi) / 365);
       }
       applied.push(event);
       nextEvent++;
     }
-    accrued += (balance * diffDays(cursor, dueDate) * roi) / 365;
-    const interest = Math.round(accrued);
+    // The carried balance runs to the due date regardless of what happened
+    // mid-month — this is the part that differs from a plain split.
+    carriedAccrual += (carriedBalance * diffDays(cursor, dueDate) * roi) / 365;
+    accrued += Math.round(carriedAccrual);
+    const interest = accrued;
 
     const netRent = lessees.reduce((s, l) => s + netRentAt(l, dueDate), 0);
     const rentCash = lessees.reduce((s, l) => s + cashAt(l, dueDate), 0);
@@ -180,6 +232,10 @@ function runSchedule(
     }
     const closing = balance - principal;
 
+    // The workbook reports the balance *carried in* as the opening figure and
+    // lets the month's movement show up in the closing POS, so a disbursement
+    // month reads `opening + disbursed - principal = POS`. `opening` is
+    // captured before any event is applied, which is exactly that figure.
     rows.push({
       monthIndex: m,
       dueDate,

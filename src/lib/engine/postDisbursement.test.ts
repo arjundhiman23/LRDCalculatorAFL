@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { simulate } from "./engine";
+import fixture from "./__fixtures__/hivale-lan1.json";
 import {
   computePostDisbursement,
   simulateWithEvents,
   type PostDisbursementEvent,
 } from "./postDisbursement";
 import type { EngineParams, LesseeInput } from "./types";
+
+/** Whole days between two ISO dates, for re-deriving the reference workbook's
+ * interest independently of the engine's own date helpers. */
+function dayCount(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000,
+  );
+}
 
 /** Same deal as the workbook scenario in engine.test.ts. */
 const lessee: LesseeInput = {
@@ -155,17 +164,130 @@ describe("without a sanctioned tenure, changes still move the closure date", () 
     );
   });
 
-  it("charges interest on the larger balance only from the effective date", () => {
+  it("charges the carried balance for the full month and the new money only from its date", () => {
     const result = computePostDisbursement(LOAN, [lessee], params, [
       event("2026-03-07", { additionalDisbursement: 100_000_000 }),
     ]);
     const row = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
     const opening = row.openingBalance;
-    // 2026-02-15 -> 2026-03-07 at the old balance, then eight days at the new.
-    const expected = Math.round(
-      (opening * 20 * 0.15) / 365 + ((opening + 100_000_000) * 8 * 0.15) / 365,
-    );
+    // The workbook's convention: the balance carried in runs all 28 days, and
+    // the money disbursed on the 7th runs its own 8 days — each rounded to
+    // the rupee separately, then summed.
+    const expected =
+      Math.round((opening * 28 * 0.15) / 365) +
+      Math.round((100_000_000 * 8 * 0.15) / 365);
     expect(row.interest).toBe(expected);
+  });
+
+  it("reports the balance carried in as the opening, with the disbursement in the closing", () => {
+    const result = computePostDisbursement(LOAN, [lessee], params, [
+      event("2026-03-07", { additionalDisbursement: 100_000_000 }),
+    ]);
+    const prior = result.schedule.find((r) => r.dueDate === "2026-02-15")!;
+    const row = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    // Opening ties to the previous month's closing, untouched by the event…
+    expect(row.openingBalance).toBe(prior.closingBalance);
+    // …and the money shows up in the closing POS instead.
+    expect(row.closingBalance).toBeCloseTo(
+      row.openingBalance + 100_000_000 - row.principal,
+      6,
+    );
+  });
+});
+
+/** Two months lifted straight from the RM team's Step-Up LRD workbook
+ * (Hivale case, sheet "LAN 1"), which is the reference this convention is
+ * derived from. The opening balance is pinned with a restatement and the
+ * moratorium holds principal at zero, so these assert the interest formula
+ * alone rather than the whole amortization path. */
+describe("matches the reference workbook's interest on a disbursement month", () => {
+  const flat: LesseeInput = {
+    name: "flat",
+    grossRent: 1,
+    tdsRate: 0,
+    propertyTaxRate: 0,
+    insuranceRate: 0,
+    otherDeduction: 0,
+    discountFactor: 1,
+    firstEscalationDate: "2099-01-01",
+    escalations: [],
+  };
+  const hivale: EngineParams = {
+    roi: 0.11,
+    disbursementDate: "2025-11-30",
+    dueDay: 15,
+    moratoriumMonths: 999,
+    propertyValue: null,
+  };
+
+  function interestAt(
+    pinDate: string,
+    pinBalance: number,
+    disbDate: string,
+    disbAmount: number,
+    dueDate: string,
+  ): number {
+    const rows = simulateWithEvents(40_000_000, 14, [flat], hivale, [
+      event(pinDate, { outstandingBalance: pinBalance }),
+      event(disbDate, { additionalDisbursement: disbAmount }),
+    ]);
+    return rows.find((r) => r.dueDate === dueDate)!.interest;
+  }
+
+  it("₹26 L disbursed 2026-02-28 → ₹3,48,840 for the month to 2026-03-15", () => {
+    expect(
+      interestAt("2026-02-15", 39_947_040.02867249, "2026-02-28", 2_600_000, "2026-03-15"),
+    ).toBe(348_840);
+  });
+
+  it("₹3 Cr disbursed 2026-08-25 → ₹5,85,003 for the month to 2026-09-15", () => {
+    expect(
+      interestAt("2026-08-15", 42_294_999.8, "2026-08-25", 30_000_000, "2026-09-15"),
+    ).toBe(585_003);
+  });
+
+  it("reproduces the interest on every one of the workbook's 181 rows", () => {
+    // Walk the reference schedule, re-deriving each month's interest from the
+    // workbook's own opening balance. Re-anchoring on the recorded POS each
+    // month means a single bad row is reported where it happens rather than
+    // compounding into every row after it.
+    const disbursements: Record<string, number> = {};
+    for (const e of fixture.events) {
+      disbursements[e.effectiveDate] = e.additionalDisbursement;
+    }
+    const mismatches: { dueDate: string; ours: number; workbook: number }[] = [];
+    let balance = fixture.loan;
+    let prev = fixture.disbursementDate;
+
+    for (const row of fixture.schedule) {
+      const due = row.dueDate;
+      const on = Object.keys(disbursements).find((d) => d > prev && d <= due);
+      const ours =
+        Math.round((balance * dayCount(prev, due) * fixture.roi) / 365) +
+        (on
+          ? Math.round((disbursements[on] * dayCount(on, due) * fixture.roi) / 365)
+          : 0);
+      if (ours !== row.interest) {
+        mismatches.push({ dueDate: due, ours, workbook: row.interest });
+      }
+      balance = row.pos;
+      prev = due;
+    }
+
+    expect(mismatches).toEqual([]);
+    expect(fixture.schedule).toHaveLength(181);
+  });
+
+  it("rounds each component separately, not the total", () => {
+    // The 2026-02-28 case is exactly where the two differ: summing the
+    // unrounded parts rounds to ₹3,48,841, one rupee above the workbook.
+    const carried = Math.round((39_947_040.02867249 * 28 * 0.11) / 365);
+    const fresh = Math.round((2_600_000 * 15 * 0.11) / 365);
+    const roundedTotal = Math.round(
+      (39_947_040.02867249 * 28 * 0.11) / 365 + (2_600_000 * 15 * 0.11) / 365,
+    );
+    expect(carried + fresh).toBe(348_840);
+    expect(roundedTotal).toBe(348_841);
   });
 });
 
