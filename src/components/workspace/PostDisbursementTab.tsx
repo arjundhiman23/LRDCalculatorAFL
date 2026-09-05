@@ -92,28 +92,50 @@ export function PostDisbursementTab({
 
   useEffect(() => {
     if (!canRun) return;
-    let cancelled = false;
-    (async () => {
-      const res = await fetch("/api/post-disbursement", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ application: app, loanAmount }),
-      });
-      if (cancelled) return;
-      if (res.ok) {
-        const body = await res.json();
-        setComputed({ key: inputsKey, result: body.result, error: null });
-      } else {
-        const body = await res.json().catch(() => null);
+    // A single compute takes ~12s on the free hosting tier, and every input
+    // change re-fires this effect. Without a debounce, typing "40000000"
+    // fires eight requests that Node.js serves sequentially: each new one
+    // waits for the previous, so response times grow linearly and Render
+    // eventually kills the instance for exceeding its request timeout.
+    //
+    // Waiting for typing to settle for a moment collapses those eight
+    // requests into one; AbortController then ensures that if the user
+    // *does* keep typing after we've fired, the in-flight request is
+    // cancelled rather than piling up alongside the new one.
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/post-disbursement", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ application: app, loanAmount }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const body = await res.json();
+          setComputed({ key: inputsKey, result: body.result, error: null });
+        } else {
+          const body = await res.json().catch(() => null);
+          setComputed({
+            key: inputsKey,
+            result: null,
+            error: body?.error ?? "Could not build the revised schedule",
+          });
+        }
+      } catch (err) {
+        // An aborted fetch throws — that's the successful cancel path,
+        // not an error the user should see.
+        if ((err as { name?: string })?.name === "AbortError") return;
         setComputed({
           key: inputsKey,
           result: null,
-          error: body?.error ?? "Could not build the revised schedule",
+          error: "Could not reach the server. Check your connection and try again.",
         });
       }
-    })();
+    }, 500);
     return () => {
-      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
     };
     // `app` is read fresh inside; only the inputs key triggers a refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
