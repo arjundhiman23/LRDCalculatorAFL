@@ -54,6 +54,16 @@ export function PostDisbursementTab({
   const loanAmount = app.proposedAmount ?? 0;
   const totalGross = app.lessees.reduce((s, l) => s + l.grossRent, 0);
 
+  // The initial disbursement plus every additional-disbursement event, for
+  // the sanctioned-amount cap check. Balance-restatements are excluded — a
+  // restatement is a correction to the loan's current outstanding after the
+  // fact (typically to reconcile with the loan system), not new money drawn
+  // against the sanction. Repayments likewise don't reduce the drawn figure.
+  const totalDrawn = loanAmount + events.reduce((s, e) => s + e.additionalDisbursement, 0);
+  const sanctionOverdrawn =
+    app.sanctionedAmount !== null && totalDrawn > app.sanctionedAmount;
+  const overdrawnBy = sanctionOverdrawn ? totalDrawn - app.sanctionedAmount! : 0;
+
   // Recompute whenever anything the run-off depends on changes.
   const inputsKey = useMemo(
     () =>
@@ -169,7 +179,17 @@ export function PostDisbursementTab({
   return (
     <div className="space-y-4">
       <Card title="Loan as disbursed">
-        <div className="grid gap-3 sm:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <Field
+            label="Sanctioned amount"
+            hint="The bank's sanctioned ceiling; leave blank to skip the cap check"
+          >
+            <NumberInput
+              value={app.sanctionedAmount}
+              min={0}
+              onChange={(v) => update((a) => ({ ...a, sanctionedAmount: v }))}
+            />
+          </Field>
           <Field
             label="Disbursed amount"
             hint="The amount actually released on the disbursement date"
@@ -197,6 +217,15 @@ export function PostDisbursementTab({
             />
           </Field>
         </div>
+        {sanctionOverdrawn && (
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            The disbursed amount plus every additional disbursement now totals{" "}
+            {formatINR(totalDrawn)}, which exceeds the sanctioned amount of{" "}
+            {formatINR(app.sanctionedAmount!)} by {formatINR(overdrawnBy)}. The schedule
+            below is still computed — check whether an additional sanction is required,
+            or trim a disbursement.
+          </p>
+        )}
         {!app.proposedTenure && (
           <p className="mt-3 text-xs text-amber-700">
             Set a sanctioned tenure to hold the loan to it automatically, starting from

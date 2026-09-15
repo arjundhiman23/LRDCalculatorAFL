@@ -93,6 +93,7 @@ export function applicationToPayload(
     finalPropertyValue: app.finalPropertyValue,
     uniqueTenureMode: app.uniqueTenureMode,
     proposedAmount: app.proposedAmount,
+    sanctionedAmount: app.sanctionedAmount,
     proposedTenure: app.proposedTenure,
     lessees: [...app.lessees]
       .sort((a, b) => a.position - b.position)

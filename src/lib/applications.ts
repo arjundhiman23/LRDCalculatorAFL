@@ -55,6 +55,7 @@ export async function saveApplication(id: string, raw: unknown): Promise<void> {
         finalPropertyValue: data.finalPropertyValue,
         uniqueTenureMode: data.uniqueTenureMode,
         proposedAmount: data.proposedAmount,
+        sanctionedAmount: data.sanctionedAmount,
         proposedTenure: data.proposedTenure,
       },
     });

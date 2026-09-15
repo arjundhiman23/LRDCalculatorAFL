@@ -78,6 +78,7 @@ export const applicationSchema = z.object({
   finalPropertyValue: z.number().min(0).nullable(),
   uniqueTenureMode: z.boolean(),
   proposedAmount: z.number().min(0).nullable(),
+  sanctionedAmount: z.number().min(0).nullable(),
   proposedTenure: z.number().int().min(1).max(600).nullable(),
   lessees: z.array(lesseeSchema).min(1),
   manualRtr: manualRtrSchema.nullable(),

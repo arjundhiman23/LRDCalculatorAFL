@@ -63,6 +63,11 @@ model Application {
   uniqueTenureMode  Boolean  @default(false)
   /// Proposed loan amount chosen by the RM (defaults to eligibility).
   proposedAmount    Float?
+  /// The amount the bank has actually sanctioned, distinct from the
+  /// eligibility-calculated proposedAmount. Nullable so existing deals are
+  /// unaffected; when set, the running total of disbursements (initial plus
+  /// every additional-disbursement event) is expected not to exceed this.
+  sanctionedAmount  Float?
   proposedTenure    Int?
 
   lessees         Lessee[]
