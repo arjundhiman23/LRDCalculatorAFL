@@ -10,19 +10,20 @@
  * rental cash flow — the same lever `solveDiscountFactor` uses at the
  * eligibility stage, just applied mid-loan. This starts from the **initial
  * disbursement itself**, so the loan is on track for the sanctioned tenure
- * from day one, not only once a later change forces a correction. Two kinds
- * of change are exempt and are allowed to move the closure date instead:
+ * from day one, not only once a later change forces a correction. One kind
+ * of change is exempt and is allowed to move the closure date instead:
  *
- * - A **revised ROI** — the tenure absorbs a rate reset, as the workbook
- *   expects.
  * - A **repayment** — a prepayment shortens the tenure rather than being
- *   offset by a lower cover.
+ *   offset by a lower cover, so the borrower gets the natural benefit of
+ *   paying early.
  *
- * Everything else that changes the outstanding balance (an additional
- * disbursement, or restating the actual outstanding balance) re-solves the
- * cover from its effective date so the loan still closes at the sanctioned
- * tenure. Without a sanctioned tenure, every change instead moves the
- * closure date, and an event-free run is byte-identical to `simulate`.
+ * Everything else — an additional disbursement, a restated outstanding
+ * balance, or a **revised ROI** — re-solves the cover from its effective
+ * date so the loan still closes at the sanctioned tenure. A rate reset
+ * qualifies because it changes the interest cost: the cover has to absorb
+ * the delta, not the tenure. Without a sanctioned tenure, every change
+ * instead moves the closure date, and an event-free run is byte-identical
+ * to `simulate`.
  *
  * If even a 100% cash cover cannot repay the loan by the sanctioned tenure,
  * the cover is capped at 1 and the loan is left to run to its natural
@@ -275,28 +276,31 @@ function closureRow<T extends ScheduleRow>(rows: T[]): T | null {
 }
 
 /** True when an event is allowed to move the closure date rather than being
- * absorbed by an automatic cash-cover adjustment: a revised ROI or a
- * repayment. */
+ * absorbed by an automatic cash-cover adjustment. Only a repayment does this
+ * — a prepayment shortens the loan voluntarily, which the borrower has
+ * earned. Everything else (a rate reset, a disbursement, a restated balance)
+ * holds the sanctioned tenure by re-solving the cover instead. */
 function isTenureMover(event: PostDisbursementEvent): boolean {
-  return (
-    (event.revisedRoi !== null && event.revisedRoi !== undefined) ||
-    event.repayment > 0
-  );
+  return event.repayment > 0;
 }
 
-/** True when an event actually moves the outstanding balance in a way that
- * needs compensating: an additional disbursement, or restating the balance. */
-function changesBalance(event: PostDisbursementEvent): boolean {
+/** True when an event needs the cash cover re-solved from its effective date
+ * onward to hold the sanctioned tenure: an additional disbursement, a
+ * restated outstanding balance, or a revised ROI. A rate reset qualifies
+ * because it changes the interest cost — the cover has to absorb the delta
+ * so the loan still closes on time. */
+function requiresResolve(event: PostDisbursementEvent): boolean {
   return (
     event.additionalDisbursement > 0 ||
-    (event.outstandingBalance !== null && event.outstandingBalance !== undefined)
+    (event.outstandingBalance !== null && event.outstandingBalance !== undefined) ||
+    (event.revisedRoi !== null && event.revisedRoi !== undefined)
   );
 }
 
-/** Solves the piecewise cash-cover overrides needed so every balance-changing
- * event (other than a revised ROI or a repayment) holds the loan to the
- * sanctioned tenure, in effective-date order. Each solve considers every
- * override already fixed for earlier events. */
+/** Solves the piecewise cash-cover overrides needed so every event other
+ * than a repayment holds the loan to the sanctioned tenure, in
+ * effective-date order. Each solve considers every override already fixed
+ * for earlier events. */
 function solveDiscountFactorOverrides(
   loan: number,
   lessees: LesseeInput[],
@@ -372,7 +376,7 @@ function solveDiscountFactorOverrides(
   solveFrom(params.disbursementDate, "at disbursement");
 
   for (const event of sortedEvents) {
-    if (isTenureMover(event) || !changesBalance(event)) continue;
+    if (isTenureMover(event) || !requiresResolve(event)) continue;
 
     if (compareISO(event.effectiveDate, targetDueDate) > 0) {
       warnings.push(
@@ -442,11 +446,11 @@ export function computePostDisbursement(
     const solved = solveDiscountFactorOverrides(loan, lessees, params, sorted, sanctioned);
     overrides = solved.overrides;
     warnings.push(...solved.warnings);
-  } else if (sorted.some((e) => changesBalance(e) && !isTenureMover(e))) {
+  } else if (sorted.some((e) => requiresResolve(e) && !isTenureMover(e))) {
     warnings.push(
       `Set a sanctioned tenure to hold the loan to it automatically — without one, ` +
-        `additional disbursements and balance restatements move the closure date ` +
-        `instead.`,
+        `additional disbursements, balance restatements and rate resets move the ` +
+        `closure date instead.`,
     );
   }
 

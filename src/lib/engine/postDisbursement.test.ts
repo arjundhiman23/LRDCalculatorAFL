@@ -509,7 +509,7 @@ describe("with a sanctioned tenure, restating the outstanding balance also holds
   });
 });
 
-describe("revised ROI and repayment are still allowed to move the tenure", () => {
+describe("only a repayment is still allowed to move the tenure", () => {
   it("a repayment shortens the tenure even with a sanctioned tenure set", () => {
     const result = computePostDisbursement(
       LOAN,
@@ -526,7 +526,7 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
     expect(result.schedule.every((r) => r.autoAdjusted)).toBe(true);
   });
 
-  it("a revised ROI moves the tenure even with a sanctioned tenure set", () => {
+  it("a revised ROI holds the tenure by re-solving the cover", () => {
     const result = computePostDisbursement(
       LOAN,
       [lessee],
@@ -534,9 +534,34 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
       [event("2027-01-05", { revisedRoi: 0.18 })],
       { originalTenureMonths: SANCTIONED },
     );
-    expect(result.tenureChangeMonths!).toBeGreaterThan(0);
-    expect(result.revisedTenureMonths).not.toBe(SANCTIONED);
-    expect(result.schedule.every((r) => r.autoAdjusted)).toBe(true);
+    // A higher rate means more interest to service, so the cover has to
+    // rise from that date onward. The tenure holds exactly at the sanctioned
+    // months regardless.
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    expect(result.tenureChangeMonths).toBe(0);
+    const before = result.schedule.find((r) => r.dueDate === "2026-12-15")!;
+    const after = result.schedule.find((r) => r.dueDate === "2027-01-15")!;
+    expect(before.autoAdjusted).toBe(true);
+    expect(after.autoAdjusted).toBe(true);
+    expect(after.discountFactor).toBeGreaterThan(before.discountFactor);
+    expect(
+      result.warnings.some((w) => w.includes("Discounting factor automatically adjusted")),
+    ).toBe(true);
+  });
+
+  it("a lower revised ROI re-solves the cover downward", () => {
+    // Symmetry: cheaper money means less servicing required, so cover falls.
+    const result = computePostDisbursement(
+      LOAN,
+      [lessee],
+      params,
+      [event("2027-01-05", { revisedRoi: 0.12 })],
+      { originalTenureMonths: SANCTIONED },
+    );
+    expect(result.revisedTenureMonths).toBe(SANCTIONED);
+    const before = result.schedule.find((r) => r.dueDate === "2026-12-15")!;
+    const after = result.schedule.find((r) => r.dueDate === "2027-01-15")!;
+    expect(after.discountFactor).toBeLessThan(before.discountFactor);
   });
 
   it("clears the loan outright when a repayment covers the whole balance", () => {
@@ -552,11 +577,11 @@ describe("revised ROI and repayment are still allowed to move the tenure", () =>
   });
 
   it("an additional disbursement combined with a repayment in the same event is treated as a tenure mover", () => {
-    // The literal rule: a revised ROI or a repayment in the event is what
-    // lets tenure move, regardless of what else the event also does — so no
-    // *new* cover is solved for this event specifically. The initial
-    // disbursement's own solved cover (from day one) still applies, since
-    // nothing has superseded it.
+    // The literal rule: a repayment in the event is what lets tenure move,
+    // regardless of what else the event also does — so no *new* cover is
+    // solved for this event specifically. The initial disbursement's own
+    // solved cover (from day one) still applies, since nothing has
+    // superseded it.
     const withEvent = computePostDisbursement(
       LOAN,
       [lessee],
@@ -652,12 +677,15 @@ describe("several events over the life of the loan", () => {
     expect(result.totalInterest).toBeGreaterThan(0);
   });
 
-  it("the disbursement is auto-adjusted, but the ROI and repayment events still move tenure from that point", () => {
-    // The disbursement in March gets its own cover, aimed at the sanctioned
-    // tenure; the later ROI/repayment events are tenure movers so the final
-    // closure need not land exactly on the sanctioned tenure.
+  it("the disbursement and ROI change are both auto-adjusted; only the repayment moves the tenure", () => {
+    // The disbursement in March and the ROI change in July each get their
+    // own cover, aimed at the sanctioned tenure. The repayment in November
+    // is the tenure mover, so the final closure need not land exactly on the
+    // sanctioned tenure — the earlier repayment brings it in.
     const marchRow = result.schedule.find((r) => r.dueDate === "2026-03-15")!;
+    const julyRow = result.schedule.find((r) => r.dueDate === "2027-07-15")!;
     expect(marchRow.autoAdjusted).toBe(true);
+    expect(julyRow.autoAdjusted).toBe(true);
   });
 });
 

@@ -276,10 +276,11 @@ export function PostDisbursementTab({
         )}
         <p className="mt-4 text-xs text-slate-400">
           A change takes effect on its own date — any day of the month, not only a due
-          date — and interest for that month is split at it. A revised ROI or a
-          repayment moves the closure date; an additional disbursement or a restated
-          outstanding balance instead holds the sanctioned tenure by automatically
-          adjusting the discounting factor on the combined rental cash flow.
+          date — and interest for that month is split at it. A repayment moves the
+          closure date; anything else — a revised ROI, an additional disbursement, or a
+          restated outstanding balance — instead holds the sanctioned tenure by
+          automatically adjusting the discounting factor on the combined rental cash
+          flow.
         </p>
       </Card>
 
@@ -453,7 +454,7 @@ function EventRow({
             onChange={(v) => onChange({ repayment: v ?? 0 })}
           />
         </Field>
-        <Field label="Revised ROI" hint="Blank keeps the rate; moves the closure date">
+        <Field label="Revised ROI" hint="Blank keeps the rate; holds the sanctioned tenure">
           {event.revisedRoi === null ? (
             <button
               className="w-full rounded-lg border border-dashed border-slate-300 px-3 py-1.5 text-sm text-slate-400 hover:border-slate-400 hover:text-slate-600"
