@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { formatCrore, formatDate } from "@/lib/format";
 import { Button, Card } from "./ui";
+import { LoiImportModal } from "./LoiImportModal";
 
 interface Row {
   id: string;
@@ -18,6 +19,7 @@ interface Row {
 export function ApplicationList({ applications }: { applications: Row[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -74,12 +76,34 @@ export function ApplicationList({ applications }: { applications: Row[] }) {
     "w-full rounded-lg border border-blue-300 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500";
 
   return (
+    <>
+      {showImport && (
+        <LoiImportModal
+          onClose={() => {
+            setShowImport(false);
+            router.refresh();
+          }}
+        />
+      )}
+
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-slate-800">Applications</h1>
-        <Button onClick={createNew} disabled={busy}>
-          {busy ? "Creating…" : "+ New application"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <svg className="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+            </svg>
+            Import from LOI
+          </button>
+          <Button onClick={createNew} disabled={busy}>
+            {busy ? "Creating…" : "+ New application"}
+          </Button>
+        </div>
       </div>
       <Card className="overflow-hidden !p-0">
         <table className="w-full text-sm">
@@ -206,5 +230,6 @@ export function ApplicationList({ applications }: { applications: Row[] }) {
         </table>
       </Card>
     </div>
+    </>
   );
 }
