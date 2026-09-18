@@ -186,30 +186,63 @@ export async function extractLoiData(buffer: Buffer): Promise<LoiExtraction> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "ANTHROPIC_API_KEY is not set. Add it to your .env file to enable LOI extraction."
+      "ANTHROPIC_API_KEY is not set on the server. Add it to .env and restart the dev server."
     );
   }
+
+  const model = process.env.LOI_EXTRACTION_MODEL ?? "claude-sonnet-4-6";
 
   const imageBlocks = await toContentBlocks(buffer);
   const content: ContentBlock[] = [...imageBlocks, { type: "text", text: EXTRACTION_PROMPT }];
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      messages: [{ role: "user", content }],
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 2048,
+        messages: [{ role: "user", content }],
+      }),
+    });
+  } catch (err) {
+    throw new Error(
+      `Could not reach api.anthropic.com — check the server's outbound network access. (${
+        err instanceof Error ? err.message : String(err)
+      })`
+    );
+  }
 
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Claude API error ${response.status}: ${body.slice(0, 200)}`);
+    const raw = await response.text().catch(() => "");
+    // Anthropic returns { error: { type, message } } — surface the message itself
+    let detail = raw.slice(0, 300);
+    try {
+      const parsed = JSON.parse(raw) as { error?: { type?: string; message?: string } };
+      if (parsed.error?.message) {
+        detail = parsed.error.message;
+      }
+    } catch {
+      /* keep the raw slice */
+    }
+
+    if (response.status === 401) {
+      throw new Error(`Anthropic rejected the API key (401): ${detail}`);
+    }
+    if (response.status === 400 && /model/i.test(detail)) {
+      throw new Error(
+        `Model "${model}" was rejected: ${detail}. Set LOI_EXTRACTION_MODEL in .env to a model your account can use.`
+      );
+    }
+    if (response.status === 429) {
+      throw new Error(`Rate limited or out of credit (429): ${detail}`);
+    }
+    throw new Error(`Anthropic API error ${response.status}: ${detail}`);
   }
 
   const data = (await response.json()) as {

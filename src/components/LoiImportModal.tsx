@@ -358,12 +358,61 @@ export function LoiImportModal({ onClose }: LoiImportModalProps) {
 
           {/* ── Error phase ──────────────────────────────────────────────── */}
           {phase === "error" && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm">
-              <p className="font-semibold text-red-800">Import failed</p>
-              <p className="mt-1 text-red-700">{globalError}</p>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm">
+                <p className="font-semibold text-red-800">Import failed</p>
+                <p className="mt-1 text-red-700">{globalError}</p>
+              </div>
+
+              {/* Per-file reasons — this is what actually tells you what broke */}
+              {rows.some((r) => r.error) && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-slate-500">Details per file</p>
+                  {rows
+                    .filter((r) => r.error)
+                    .map((row) => (
+                      <div
+                        key={row.file.name}
+                        className="rounded-lg border border-red-100 bg-white px-3 py-2"
+                      >
+                        <p className="truncate text-sm font-medium text-slate-700">
+                          {row.file.name}
+                        </p>
+                        <p className="mt-0.5 break-words text-xs text-red-600">
+                          {row.error}
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* Common causes */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                <p className="mb-1 font-medium text-slate-600">Common causes</p>
+                <ul className="list-disc space-y-0.5 pl-4">
+                  <li>
+                    <code className="text-slate-700">ANTHROPIC_API_KEY</code> missing from{" "}
+                    <code className="text-slate-700">.env</code> — add it and restart the dev server
+                  </li>
+                  <li>API key lacks credit, or the key is invalid / revoked</li>
+                  <li>File is password-protected, corrupted, or an unsupported format</li>
+                  <li>Server has no outbound access to api.anthropic.com</li>
+                </ul>
+              </div>
+
               <button
-                onClick={() => { setPhase("upload"); setGlobalError(null); }}
-                className="mt-3 text-xs text-red-600 underline hover:text-red-800"
+                onClick={() => {
+                  setPhase("upload");
+                  setGlobalError(null);
+                  setRows((prev) =>
+                    prev.map((r) => ({
+                      ...r,
+                      status: "pending" as const,
+                      error: undefined,
+                    }))
+                  );
+                }}
+                className="text-xs text-blue-600 underline hover:text-blue-800"
               >
                 Try again
               </button>
